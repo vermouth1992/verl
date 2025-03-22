@@ -1352,6 +1352,13 @@ class FSDPLLMWorker(LLMWorker):
 
         log_gpu_memory_usage('After actor optimizer init', logger=logger)
 
+        self.flops_counter = FlopsCounter(self.critic_model_config)
+        self.checkpoint_manager = FSDPCheckpointManager(
+            model=self.critic_module,
+            optimizer=self.critic_optimizer,
+            lr_scheduler=self.critic_lr_scheduler,
+            processing_class=self.processor if self.processor is not None else self.tokenizer)
+
 
     def _reduce_output(self, model_output):
         # Note that model_output is parallelized. We need to reduce it to a 
