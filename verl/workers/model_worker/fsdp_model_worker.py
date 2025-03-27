@@ -32,6 +32,7 @@ from verl.utils import hf_tokenizer, hf_processor
 from verl.utils.fs import copy_to_local
 from verl import DataProto
 from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
+import verl.utils.torch_functional as verl_F
 
 from flash_attn.bert_padding import pad_input, unpad_input, index_first_axis, rearrange
 
@@ -60,9 +61,6 @@ def get_sharding_strategy(device_mesh):
     else:
         raise NotImplementedError(f"Get device mesh ndim={device_mesh.ndim}, but only support 1 or 2")
     return sharding_strategy
-
-
-
 
 
 class FSDPLLMWorker(LLMWorker):
@@ -96,6 +94,8 @@ class FSDPLLMWorker(LLMWorker):
         self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
 
         self.freeze = self.config.freeze
+
+        self.compute_entropy_from_logits = torch.compile(, dynamic=True, disable=not self.config.use_torch_compile)
     
     def init_model(self):
         from verl.utils.model import print_model_size, update_model_config, get_generation_config
@@ -301,7 +301,8 @@ class FSDPLLMWorker(LLMWorker):
 
 
     def _forward_micro_batch(self, micro_batch):
-        """
+        """For language model, we assume micro_batch contains
+        - input_ids, attention_mask, position_ids and optional multi_modal_inputs for VLMs
         Returns: 
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)

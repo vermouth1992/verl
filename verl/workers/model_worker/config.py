@@ -23,3 +23,4 @@ class FSDPModelConfig:
     enable_gradient_checkpointing: False
     micro_batch_size: int
     micro_max_token_len: int
+    use_torch_compile: bool
