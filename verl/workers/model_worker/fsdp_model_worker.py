@@ -30,9 +30,10 @@ from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import register, Dispatch
 from verl.utils import hf_tokenizer, hf_processor
 from verl.utils.fs import copy_to_local
+from verl import DataProto
 
 from .base import LLMWorker
-from .config import ModelConfig, FSDPConfig
+from .config import FSDPModelConfig
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
@@ -67,24 +68,21 @@ class FSDPLLMWorker(LLMWorker):
     or it can serve as an SPMD engine, that can be incorporated in another worker
     """
     # FSDP1 + ulysses + HF Model
-    def __init__(self, 
-                 model_config: ModelConfig, 
-                 parallel_config: FSDPConfig):
+    def __init__(self, config: FSDPModelConfig):
         # choose model-type based on config
         if not torch.distributed.is_initialized():
             torch.distributed.init_process_group()
 
-        self.model_config = model_config
-        self.parallel_config = parallel_config
+        self.config = config
 
         # build device mesh for FSDP
         world_size = torch.distributed.get_world_size()
         # TODO(sgm): support FSDP hybrid shard for larger model
-        self.device_mesh = create_device_mesh(world_size=world_size, fsdp_size=self.parallel_config.fsdp_size)
+        self.device_mesh = create_device_mesh(world_size=world_size, fsdp_size=self.config.fsdp_size)
 
         # build device mesh for Ulysses Sequence Parallel
         self.ulysses_device_mesh = None
-        self.ulysses_sequence_parallel_size = self.parallel_config.ulysses_sequence_parallel_size
+        self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
         dp = world_size // self.ulysses_sequence_parallel_size
         if self.ulysses_sequence_parallel_size > 1:
             self.ulysses_device_mesh = init_device_mesh('cuda',
@@ -93,7 +91,7 @@ class FSDPLLMWorker(LLMWorker):
 
         self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
 
-        self.freeze = self.model_config.freeze
+        self.freeze = self.config.freeze
     
     def init_model(self):
         from verl.utils.model import print_model_size, update_model_config, get_generation_config
@@ -103,23 +101,23 @@ class FSDPLLMWorker(LLMWorker):
         from torch import optim
 
         log_gpu_memory_usage('Before init from HF AutoModel', logger=logger)
-        local_path = copy_to_local(self.model_config.model_path)
+        local_path = copy_to_local(self.config.model_path)
 
         # note that we have to create model in fp32. Otherwise, the optimizer is in bf16, which is incorrect
         # TODO(zhangchi.usc1992): 1. support create from random initialized model. 2. Support init with FSDP directly
-        self.tokenizer = hf_tokenizer(local_path, trust_remote_code=self.model_config.trust_remote_code)
-        self.processor = hf_processor(local_path, trust_remote_code=self.model_config.trust_remote_code)
+        self.tokenizer = hf_tokenizer(local_path, trust_remote_code=self.config.trust_remote_code)
+        self.processor = hf_processor(local_path, trust_remote_code=self.config.trust_remote_code)
 
-        torch_dtype = self.parallel_config.model_dtype
+        torch_dtype = self.config.model_dtype
         if torch_dtype is None:
-            torch_dtype = torch.float32 if self.model_config.freeze else torch.bfloat16
+            torch_dtype = torch.float32 if self.config.freeze else torch.bfloat16
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
         # override model kwargs
-        self.hf_model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=self.model_config.trust_remote_code)
+        self.hf_model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=self.config.trust_remote_code)
 
-        self.generation_config = get_generation_config(local_path, trust_remote_code=self.model_config.trust_remote_code)
+        self.generation_config = get_generation_config(local_path, trust_remote_code=self.config.trust_remote_code)
 
         override_config_kwargs = {
             'bos_token_id': self.tokenizer.bos_token_id,
@@ -127,7 +125,7 @@ class FSDPLLMWorker(LLMWorker):
             'pad_token_id': self.tokenizer.pad_token_id,
         }
         # override the model config, such as dropout, rope factor, etc,.
-        override_config_kwargs.update(override_model_config)
+        override_config_kwargs.update(self.config.override_model_config)
         update_model_config(self.hf_model_config, override_config_kwargs=override_config_kwargs)
         if self.rank == 0:
             print(f'Model config after override: {self.hf_model_config}')
@@ -151,21 +149,21 @@ class FSDPLLMWorker(LLMWorker):
                                                               torch_dtype=torch_dtype,
                                                               config=self.hf_model_config,
                                                               attn_implementation='flash_attention_2',
-                                                              trust_remote_code=self.model_config.trust_remote_code)
+                                                              trust_remote_code=self.config.trust_remote_code)
 
-            if use_remove_padding or self.ulysses_sequence_parallel_size > 1:
+            if self.config.use_remove_padding or self.ulysses_sequence_parallel_size > 1:
                 from verl.models.transformers.monkey_patch import apply_monkey_patch
                 apply_monkey_patch(model=actor_module)
 
             # Apply Liger kernel to the model if use_liger is set to True
-            if use_liger:
+            if self.config.use_liger:
                 from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
                 _apply_liger_kernel_to_instance(model=actor_module)
 
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
 
-            if enable_gradient_checkpointing:
+            if self.config.enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
         torch.distributed.barrier()
 
@@ -175,23 +173,9 @@ class FSDPLLMWorker(LLMWorker):
         log_gpu_memory_usage('After init from HF AutoModel', logger=logger)
 
         # We wrap FSDP for rollout as well
-        mixed_precision_config = fsdp_config.get('mixed_precision', None)
-        if mixed_precision_config is not None:
-            param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'bf16'))
-            reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get('reduce_dtype', 'fp32'))
-            buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get('buffer_dtype', 'fp32'))
-        else:
-            param_dtype = torch.bfloat16
-            reduce_dtype = torch.float32
-            buffer_dtype = torch.float32
-
-        mixed_precision = MixedPrecision(param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype)
+        mixed_precision = MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, buffer_dtype=torch.float32)
 
         auto_wrap_policy = get_fsdp_wrap_policy(module=actor_module, config=fsdp_config.get('wrap_policy', None))
-
-        if self._is_rollout and self.config.rollout.name == 'hf':
-            # TODO(zhangchi.usc1992, shengguangming) fix me. Current, auto_wrap_policy causes HFRollout to hang in Gemma
-            auto_wrap_policy = None
 
         print(f'wrap_policy: {auto_wrap_policy}')
 
@@ -201,7 +185,7 @@ class FSDPLLMWorker(LLMWorker):
         # TODO: add transformer policy
         # We force reference policy to use CPUOffload to save memory.
         # We force turn off CPUOffload for actor because it causes incorrect results when using grad accumulation
-        cpu_offload = None if role == 'actor' else CPUOffload(offload_params=True)
+        cpu_offload = None if not self.config.freeze else CPUOffload(offload_params=True)
         actor_module_fsdp = FSDP(
             actor_module,
             cpu_offload=cpu_offload,
@@ -218,7 +202,7 @@ class FSDPLLMWorker(LLMWorker):
         log_gpu_memory_usage('After Actor FSDP init', logger=logger)
 
         # TODO: add more optimizer args into config
-        if role == 'actor' and optim_config is not None:
+        if self.freeze and optim_config is not None:
             from verl.utils.torch_functional import get_constant_schedule_with_warmup
             actor_optimizer = optim.AdamW(actor_module_fsdp.parameters(),
                                           lr=optim_config.lr,
