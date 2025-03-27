@@ -31,6 +31,9 @@ from verl.single_controller.base.decorator import register, Dispatch
 from verl.utils import hf_tokenizer, hf_processor
 from verl.utils.fs import copy_to_local
 from verl import DataProto
+from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
+
+from flash_attn.bert_padding import pad_input, unpad_input, index_first_axis, rearrange
 
 from .base import LLMWorker
 from .config import FSDPModelConfig
@@ -83,6 +86,7 @@ class FSDPLLMWorker(LLMWorker):
         # build device mesh for Ulysses Sequence Parallel
         self.ulysses_device_mesh = None
         self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
+        self.use_ulysses_sp = self.ulysses_sequence_parallel_size > 1
         dp = world_size // self.ulysses_sequence_parallel_size
         if self.ulysses_sequence_parallel_size > 1:
             self.ulysses_device_mesh = init_device_mesh('cuda',
@@ -145,7 +149,7 @@ class FSDPLLMWorker(LLMWorker):
                     hf_module_class = supported_class
             assert hf_module_class is not None
 
-            actor_module = hf_module_class.from_pretrained(pretrained_model_name_or_path=local_path,
+            self.module = hf_module_class.from_pretrained(pretrained_model_name_or_path=local_path,
                                                               torch_dtype=torch_dtype,
                                                               config=self.hf_model_config,
                                                               attn_implementation='flash_attention_2',
@@ -153,30 +157,29 @@ class FSDPLLMWorker(LLMWorker):
 
             if self.config.use_remove_padding or self.ulysses_sequence_parallel_size > 1:
                 from verl.models.transformers.monkey_patch import apply_monkey_patch
-                apply_monkey_patch(model=actor_module)
+                apply_monkey_patch(model=self.module)
 
             # Apply Liger kernel to the model if use_liger is set to True
             if self.config.use_liger:
                 from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
-                _apply_liger_kernel_to_instance(model=actor_module)
+                _apply_liger_kernel_to_instance(model=self.module)
 
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
-            actor_module.to(torch_dtype)
+            self.module.to(torch_dtype)
 
             if self.config.enable_gradient_checkpointing:
-                actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+                self.module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
         torch.distributed.barrier()
 
         if self.rank == 0:
-            print_model_size(actor_module)
+            print_model_size(self.module)
 
         log_gpu_memory_usage('After init from HF AutoModel', logger=logger)
 
         # We wrap FSDP for rollout as well
         mixed_precision = MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, buffer_dtype=torch.float32)
 
-        auto_wrap_policy = get_fsdp_wrap_policy(module=actor_module, config=fsdp_config.get('wrap_policy', None))
-
+        auto_wrap_policy = get_fsdp_wrap_policy(module=self.module, config=None)
         print(f'wrap_policy: {auto_wrap_policy}')
 
         fsdp_mesh = self.device_mesh
@@ -186,8 +189,8 @@ class FSDPLLMWorker(LLMWorker):
         # We force reference policy to use CPUOffload to save memory.
         # We force turn off CPUOffload for actor because it causes incorrect results when using grad accumulation
         cpu_offload = None if not self.config.freeze else CPUOffload(offload_params=True)
-        actor_module_fsdp = FSDP(
-            actor_module,
+        self.module_fsdp = FSDP(
+            self.module,
             cpu_offload=cpu_offload,
             param_init_fn=init_fn,
             use_orig_params=False,
@@ -204,7 +207,7 @@ class FSDPLLMWorker(LLMWorker):
         # TODO: add more optimizer args into config
         if self.freeze and optim_config is not None:
             from verl.utils.torch_functional import get_constant_schedule_with_warmup
-            actor_optimizer = optim.AdamW(actor_module_fsdp.parameters(),
+            actor_optimizer = optim.AdamW(self.module_fsdp.parameters(),
                                           lr=optim_config.lr,
                                           betas=optim_config.get('betas', (0.9, 0.999)),
                                           weight_decay=optim_config.get('weight_decay', 1e-2))
@@ -318,7 +321,7 @@ class FSDPLLMWorker(LLMWorker):
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
-            if self.use_remove_padding:
+            if self.config.use_remove_padding:
                 input_ids_rmpad, indices, *_ = unpad_input(input_ids.unsqueeze(-1),
                                                         attention_mask)  # input_ids_rmpad (total_nnz, ...)
                 input_ids_rmpad = input_ids_rmpad.transpose(0, 1)  # (1, total_nnz)
@@ -346,16 +349,15 @@ class FSDPLLMWorker(LLMWorker):
                 input_ids_rmpad_rolled = input_ids_rmpad_rolled.squeeze(0)  # ((total_nnz / sp) + pad)
 
                 # only pass input_ids and position_ids to enable flash_attn_varlen
-                output = self.actor_module(input_ids=input_ids_rmpad,
-                                        attention_mask=None,
-                                        position_ids=position_ids_rmpad,
-                                        **multi_modal_inputs,
-                                        use_cache=False)  # prevent model thinks we are generating
+                output = self.module_fsdp(input_ids=input_ids_rmpad,
+                                           attention_mask=None,
+                                           position_ids=position_ids_rmpad,
+                                           **multi_modal_inputs,
+                                           use_cache=False)  # prevent model thinks we are generating
                 return self._reduce_output(output)
 
         
     def infer_batch(self, data: DataProto) -> DataProto:
-        assert self._is_actor
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
 
