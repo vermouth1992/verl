@@ -95,7 +95,8 @@ class FSDPLLMWorker(LLMWorker):
 
         self.freeze = self.config.freeze
 
-        self.compute_entropy_from_logits = torch.compile(, dynamic=True, disable=not self.config.use_torch_compile)
+        self.compute_entropy_from_logits = torch.compile(verl_F.entropy_from_logits, dynamic=True, 
+                                                         disable=not self.config.use_torch_compile)
     
     def init_model(self):
         from verl.utils.model import print_model_size, update_model_config, get_generation_config
