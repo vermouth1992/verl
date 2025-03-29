@@ -233,17 +233,17 @@ class FSDPLLMWorker(LLMWorker):
     def _reduce_output(self, model_output):
         # Note that model_output is parallelized. We need to reduce it to a 
         # canonical format so that it can be processed by a unified loss function
-        # irrespective of the parallel strategy
+        # irrespective of the parallel strategy (e.g., fsdp/ulysses/megatron)
         # choose output reduction function based on model-type
 
-        if self.hf_model_config == 'ForCausalLM':
+        if 'ForCausalLM' in self.hf_model_config.architectures[0]:
 
             logits_rmpad = model_output.logits.squeeze(0)  # (total_nnz, vocab_size)
             logits_rmpad.div_(temperature)
             # compute entropy
             entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad)  # ((total_nnz / sp) + pad)
             # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
-            log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
+            log_probs = verl_F.logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
 
             # gather log_prob if sp > 1
             if self.use_ulysses_sp:
@@ -358,6 +358,9 @@ class FSDPLLMWorker(LLMWorker):
                                            use_cache=False)  # prevent model thinks we are generating
                 return self._reduce_output(output)
 
+            else:
+                
+
         
     def infer_batch(self, data: DataProto) -> DataProto:
         if self._is_offload_param:
@@ -419,7 +422,7 @@ class FSDPLLMWorker(LLMWorker):
         # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes
         # unshard the root FSDP module
         if self.world_size > 1:
-            self.actor.actor_module._handle.reshard(True)
+            self.module_fsdp._handle.reshard(True)
 
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.actor_module_fsdp)
