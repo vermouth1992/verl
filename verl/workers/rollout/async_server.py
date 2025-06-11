@@ -181,7 +181,7 @@ class AsyncLLMServerManager:
         """Sleep all vllm instances."""
         ray.get([server.sleep.remote() for server in self.async_llm_servers])
 
-    def submit_chat_completions(
+    async def submit_chat_completions(
         self,
         messages: List[Dict[str, str]],
         sampling_params: Dict[str, Any],
