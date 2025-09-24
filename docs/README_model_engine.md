@@ -51,7 +51,9 @@ A tentative model engine API can be found: https://github.com/volcengine/verl/bl
 
 ### Add a new backend
 - Start a new folder under `verl/workers/engine`. Then, implement `transformer_impl.py`. If you want to implement a non-transformer model, please contact us in advance.
+- Add the engine config to the GSM8k SFT trainer script: https://github.com/volcengine/verl/blob/main/tests/special_e2e/sft/run_sft_engine_gsm8k.sh
+- Invoke the tests with your backend: https://github.com/volcengine/verl/blob/main/tests/special_e2e/sft/test_sft_engine_all.sh. This test script will run various backends and various configurations, and compare the loss and grad norm of the first step to make sure they are close.
 
 ### Add a new model type
-
+This is mainly reserved for the output is not just text. Please discuss with us before you proceed.
 
