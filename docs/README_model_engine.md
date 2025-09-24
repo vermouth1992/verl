@@ -6,6 +6,8 @@
 | FSDP + ulysses | Day 1 support HF model | - Dense is OK <br> - MoE is bad | Huggingface + monkey patch     | Monkey patch can be easily impacted by transformers version |
 | MCore          | Limited                | Best                       | GPTModel (One model for all)   | Supporting new models is difficult                          |
 
+- We monkey patch attention function to support ulysses
+- We monkey patch VLM models to support FSDP with mixed data with and without images
 
 ## Class Hierarchy
 Note that all the workers and trainers run in **SPMD** mode. SFT/DPO/RM trainer is directly invoked by `torchrun`. The Actor/Critic worker can also be invoked by a RayWorkerGroup and provides APIs to a single controller. 
