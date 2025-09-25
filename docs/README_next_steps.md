@@ -32,9 +32,11 @@ while not done:
     next_obs, reward, done, info = env.step(action)  # tool call or env interaction
     obs = next_obs
 ```
-Agent loop in verl is the **interface** that connects agent/env framework to the RL training framework. Most agent framework interacts with LLM using standard OpenAI Compatible server via string in and string out. This will cause issues in RL training as tokenizer decode + encode is not revertible. Thus, users have to handle
+Agent loop in verl is the **interface** that connects agent/env framework and the RL training framework. Most agent framework interacts with LLM using standard OpenAI Compatible server via string in and string out. This will cause issues in RL training as tokenizer decode + encode is not revertible. Thus, users have to handle
 - Token in token out
 - Convert trajectory into a format that can be consumed by the trainer
+
+in the customized Agent Loop.
 
 We will write a detailed instruction about how to extend to new environment/agent framework shortly.
 
