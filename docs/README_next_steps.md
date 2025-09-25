@@ -2,7 +2,7 @@
 
 ## Introduction
 We observe a wide range of adoption of verl in various RL research papers and production systems over the last 6 months. And most of them built on top of verl to develop advanced and customized features such as asynchronous RL, advanced data sampling, replay policies, multi-modal RL including audio, image and video, etc,.
-We acknowledge that it is impossible for verl to adopt all these great features. So, instead of building verl as a monolithic repo, we would like to make verl a **composable** and **customizable** **library** so that people can easily build on top of it (e.g., import core components).
+We acknowledge that it is impossible for verl to adopt all these great features. So, instead of building verl as a monolithic repo, we would like to make verl a **composable** and **customizable** **library** so that people can easily build on top of it (e.g., import core components and start their own repo).
 Moreover, we believe that a **multi-backend** system with well-defined APIs is essential in the long term for easy integration of different training and inference systems.
 In light of these statements, we propose the following approach.
 
