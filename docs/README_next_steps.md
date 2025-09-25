@@ -11,10 +11,10 @@ A RL library can be decomposed into 5 parts: 1) Rollout Engine; 2) Model Engine;
 Each component acts as a **service**, whose backend is agnostic to the RL system. RL system is a single controller that manipulates the data flow of those service and add customized algorithm-specific components such as replay buffer.
 
 ### Rollout Engine
-Recent RL infrastructures adopt native server mode rollouts (e.g., [slime](https://github.com/THUDM/slime)). This makes integration of new features in inference engine easily and provide a great abstraction between rollout engine and the rest of the RL systems. This also makes supporting multi-backend rollout system easy as the common abstraction of various inference backend simply becomes a http endpoint.
+Recent RL infrastructures adopt native server mode rollouts (e.g., [slime](https://github.com/THUDM/slime)). This makes integration of new features in inference engine easily and provide a great abstraction between rollout engine and the rest of the RL systems. This also makes supporting multi-backend rollout system easy as the common abstraction of various inference backend simply becomes a http endpoint. verl is migrating to this design.
 
 ### Model Engine
-Similar to rollout engine, we will also make model engine as a **service**. In order to do so, a well-defined interface is necessary. Also, it is important to make the model engine extensible to more frontier model architectures such as Qwen3-Omni, VLA and even diffusion models. By defining a model engine, top level trainers (e.g., SFT/DPO/RM) and workers (e.g., Actor/Critic) can reuse most of the code by simply changing the loss function and the data loader. Please refer to https://github.com/vermouth1992/verl/blob/chi/dev/roadmap/docs/README_model_engine.md for more details.
+Similar to rollout engine, verl will also make model engine as a **service**. In order to do so, a well-defined interface is necessary. Also, it is important to make the model engine extensible to more frontier model architectures such as Qwen3-Omni, VLA and even diffusion models. By defining a model engine, top level trainers (e.g., SFT/DPO/RM) and workers (e.g., Actor/Critic) can reuse most of the code by simply changing the loss function and the data loader. Please refer to https://github.com/vermouth1992/verl/blob/chi/dev/roadmap/docs/README_model_engine.md for more details.
 
 
 ### Weight Transfer Engine
