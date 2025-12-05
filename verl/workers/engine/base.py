@@ -22,6 +22,11 @@ from tensordict import TensorDict
 
 from verl.utils.device import get_device_name
 
+from verl.utils import tensordict_utils as tu
+
+from verl.workers.config import EngineConfig, OptimizerConfig, HFModelConfig
+from verl.trainer.config import CheckpointConfig
+
 
 class BaseEngine:
     """
@@ -30,6 +35,18 @@ class BaseEngine:
 
     Engine implementations must subclass BaseEngine and provide concrete behavior for all methods.
     """
+
+    def __init__(
+            self,
+            model_config: HFModelConfig,
+            engine_config: EngineConfig,
+            optimizer_config: OptimizerConfig,
+            checkpoint_config: CheckpointConfig,
+    ):
+        self.model_config = model_config
+        self.engine_config = engine_config
+        self.optimizer_config = optimizer_config
+        self.checkpoint_config = checkpoint_config
 
     def initialize(self):
         """
@@ -105,6 +122,19 @@ class BaseEngine:
         Returns:
             dict[str, torch.Tensor]: A dictionary containing the aggregated training metrics for the batch.
         """
+        # inject engineering parameters if not specified
+        default_keys = dict(
+            use_remove_padding=self.model_config.use_remove_padding,
+            use_dynamic_bsz=self.engine_config.use_dynamic_bsz,
+            max_token_len_per_gpu=self.engine_config.max_token_len_per_gpu,
+            micro_batch_size_per_gpu=self.engine_config.micro_batch_size_per_gpu,
+            use_fused_kernels=self.engine_config.use_fused_kernels
+        )
+
+        for key, val in default_keys.items():
+            if key not in data.keys():
+                tu.assign_non_tensor(data, key=val)
+
         self.optimizer_zero_grad()
         outputs = self.forward_backward_batch(data, loss_function, forward_only=False)
         grad_norm = self.optimizer_step()
@@ -123,6 +153,18 @@ class BaseEngine:
         Returns:
             Any: The output of the inference, which can be used for predictions or other purposes.
         """
+        default_keys = dict(
+            use_remove_padding=self.model_config.use_remove_padding,
+            use_dynamic_bsz=self.engine_config.use_dynamic_bsz,
+            max_token_len_per_gpu=self.engine_config.infer_max_token_len_per_gpu,
+            micro_batch_size_per_gpu=self.engine_config.infer_micro_batch_size_per_gpu,
+            use_fused_kernels=self.engine_config.use_fused_kernels
+        )
+
+        for key, val in default_keys.items():
+            if key not in data.keys():
+                tu.assign_non_tensor(data, key=val)
+
         with torch.no_grad():
             outputs = self.forward_backward_batch(data, loss_function, forward_only=True)
         return outputs
@@ -159,12 +201,12 @@ class BaseEngine:
         raise NotImplementedError
 
     def save_checkpoint(
-        self,
-        local_path: str,
-        hdfs_path: Optional[str] = None,
-        global_step: int = 0,
-        max_ckpt_to_keep: Optional[int] = None,
-        **kwargs,
+            self,
+            local_path: str,
+            hdfs_path: Optional[str] = None,
+            global_step: int = 0,
+            max_ckpt_to_keep: Optional[int] = None,
+            **kwargs,
     ) -> None:
         """
         Save model, optimizer, and scheduler states to a checkpoint.
@@ -179,7 +221,7 @@ class BaseEngine:
         raise NotImplementedError
 
     def load_checkpoint(
-        self, local_path: str, hdfs_path: Optional[str] = None, del_local_after_load: bool = True, **kwargs
+            self, local_path: str, hdfs_path: Optional[str] = None, del_local_after_load: bool = True, **kwargs
     ) -> None:
         """
         Load model, optimizer, and scheduler states from a checkpoint.

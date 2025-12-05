@@ -60,6 +60,9 @@ from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 
+from verl.workers.utils.padding import left_right_2_no_padding, no_padding_2_padding
+from verl.utils import tensordict_utils as tu
+
 
 @dataclass
 class ResourcePoolManager:
@@ -342,6 +345,8 @@ class RayPPOTrainer:
         # kl loss control currently not suppoorted
         if self.config.algorithm.use_kl_in_reward:
             self.kl_ctrl_in_reward = core_algos.get_kl_controller(self.config.algorithm.kl_ctrl)
+
+        self.use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
 
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
@@ -1143,7 +1148,26 @@ class RayPPOTrainer:
                         )
                     else:  # Recompute old_log_probs
                         with marked_timer("old_log_prob", timing_raw, color="blue"):
-                            old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                            if self.use_legacy_worker_impl == 'disable':
+                                # TODO: remove step 1, 2, 4 after we make the whole training tensordict and padding free
+                                # step 1: convert dataproto to tensordict.
+                                batch_td = batch.to_tensordict()
+                                # step 2: convert from padding to nopadding
+                                batch_td = left_right_2_no_padding(batch_td)
+                                # step 3: add meta info
+                                tu.assign_non_tensor(batch_td, calculate_entropy=True)
+                                output = self.actor_rollout_wg.compute_log_prob(batch_td)
+                                # gather output
+                                breakpoint()
+
+                                # no_padding_2_padding()
+
+
+                                # step 4. No padding to padding
+
+                                pass
+                            else:
+                                old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                             entropys = old_log_prob.batch["entropys"]
                             response_masks = batch.batch["response_mask"]
                             actor_config = self.config.actor_rollout_ref.actor

@@ -100,12 +100,13 @@ class FSDPEngine(BaseEngine):
         Args:
             config: Configuration object with FSDP and model settings.
         """
-        super().__init__()
+        super().__init__(model_config=model_config,
+                         engine_config=engine_config,
+                         optimizer_config=optimizer_config,
+                         checkpoint_config=checkpoint_config)
 
-        self.model_config = model_config
-        self.engine_config = engine_config
-        self.optimizer_config = optimizer_config
-        self.checkpoint_config = checkpoint_config
+        assert isinstance(self.engine_config, FSDPEngineConfig)
+        assert isinstance(self.optimizer_config, FSDPOptimizerConfig)
 
         self.mode = None
 

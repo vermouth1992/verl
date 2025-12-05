@@ -65,12 +65,14 @@ class MegatronEngine(BaseEngine):
         optimizer_config: McoreOptimizerConfig,
         checkpoint_config: CheckpointConfig,
     ):
-        super().__init__()
+        super().__init__(model_config=model_config,
+                         engine_config=engine_config,
+                         optimizer_config=optimizer_config,
+                         checkpoint_config=checkpoint_config)
 
-        self.model_config = model_config
-        self.engine_config = engine_config
-        self.optimizer_config = optimizer_config
-        self.checkpoint_config = checkpoint_config
+        assert isinstance(self.engine_config, McoreEngineConfig)
+        assert isinstance(self.optimizer_config, McoreOptimizerConfig)
+
 
         self._init_device_mesh()
 
