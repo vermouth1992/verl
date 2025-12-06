@@ -1305,14 +1305,21 @@ class RayPPOTrainer:
                                                               epochs=ppo_epochs,
                                                               seed=seed,
                                                               dataloader_kwargs={"shuffle": shuffle})
+                                # manually wakeup actor
+
                                 # update
                                 output_ref_lst = []
                                 for batch_idx, mini_batch_td in enumerate(dataloader):
                                     # add global token num
                                     global_token_num = mini_batch_td['input_ids'].offsets().diff().tolist()
-                                    tu.assign_non_tensor(mini_batch_td, global_token_num=NonTensorData(global_token_num))
+                                    tu.assign_non_tensor(mini_batch_td,
+                                                         global_token_num=NonTensorData(global_token_num),
+                                                         update_lr_scheduler=batch_idx == len(dataloader) - 1)
                                     actor_output_ref = self.actor_rollout_wg.train_batch_actor(mini_batch_td)
                                     output_ref_lst.append(actor_output_ref)
+
+                                # manually sleep actor
+
                                 actor_output = [output_ref.get() for output_ref in output_ref_lst]
                                 actor_output = [tu.get(output, 'metrics') for output in actor_output]
 

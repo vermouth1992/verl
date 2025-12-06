@@ -19,7 +19,7 @@ import gc
 import logging
 import os
 import warnings
-from contextlib import nullcontext
+from contextlib import nullcontext, ContextDecorator
 from typing import Callable, Optional
 
 import torch
@@ -446,21 +446,21 @@ class FSDPEngine(BaseEngine):
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
 
-    def train_mode(self):
+    def train_mode(self, **kwargs):
         """
         Return a context manager that switches to training mode with FSDP-specific handling.
 
         Includes parameter and optimizer offload entry/exit.
         """
-        return EngineTrainModeCtx(self)
+        return EngineTrainModeCtx(self, **kwargs)
 
-    def eval_mode(self):
+    def eval_mode(self, **kwargs):
         """
         Return a context manager that switches to evaluation mode with FSDP-specific handling.
 
         Includes activation offload entry/exit.
         """
-        return EngineEvalModeCtx(self)
+        return EngineEvalModeCtx(self, **kwargs)
 
     def get_data_parallel_rank(self):
         if self.ulysses_device_mesh is not None:
@@ -667,12 +667,13 @@ class FSDPEngine(BaseEngine):
 
 
 class EngineEvalModeCtx:
-    def __init__(self, engine: FSDPEngine):
+    def __init__(self, engine: FSDPEngine, **kwargs):
         self.engine = engine
+        self.disable_auto_offload = kwargs.get('disable_auto_offload', False)
 
     def __enter__(self):
         self.engine.mode = "eval"
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             load_fsdp_model_to_gpu(self.engine.module)
 
         self.engine.ulysses_sharding_manager.__enter__()
@@ -689,20 +690,21 @@ class EngineEvalModeCtx:
             elif fsdp_version(self.engine.module) == 2:
                 self.engine.module.reshard()
 
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             offload_fsdp_model_to_cpu(self.engine.module)
         self.engine.mode = None
 
 
 class EngineTrainModeCtx:
-    def __init__(self, engine: FSDPEngine):
+    def __init__(self, engine: FSDPEngine, **kwargs):
         self.engine = engine
+        self.disable_auto_offload = kwargs.get('disable_auto_offload', False)
 
     def __enter__(self):
         self.engine.mode = "train"
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             load_fsdp_model_to_gpu(self.engine.module)
-        if self.engine._is_offload_optimizer:
+        if self.engine._is_offload_optimizer and not self.disable_auto_offload:
             load_fsdp_optimizer(optimizer=self.engine.optimizer, device_id=get_torch_device().current_device())
 
         self.engine.ulysses_sharding_manager.__enter__()
@@ -712,9 +714,9 @@ class EngineTrainModeCtx:
         self.engine.ulysses_sharding_manager.__exit__(exc_type, exc_value, traceback)
         self.engine.optimizer_zero_grad()
 
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             offload_fsdp_model_to_cpu(self.engine.module)
-        if self.engine._is_offload_optimizer:
+        if self.engine._is_offload_optimizer and not self.disable_auto_offload:
             offload_fsdp_optimizer(optimizer=self.engine.optimizer)
         self.engine.mode = None
 

@@ -56,7 +56,7 @@ class BaseEngine:
         """
         raise NotImplementedError
 
-    def train_mode(self):
+    def train_mode(self, **kwargs):
         """
         Context manager entry for switching the engine and model into training mode.
 
@@ -66,7 +66,7 @@ class BaseEngine:
         """
         raise NotImplementedError
 
-    def eval_mode(self):
+    def eval_mode(self, **kwargs):
         """
         Context manager entry for switching the engine and model into evaluation mode.
 

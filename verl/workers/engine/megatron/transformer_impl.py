@@ -324,7 +324,7 @@ class MegatronEngine(BaseEngine):
             use_dist_checkpointing=self.engine_config.use_dist_checkpointing,
         )
 
-    def train_mode(self):
+    def train_mode(self, **kwargs):
         """
         Context manager entry for switching the engine and model into training mode.
 
@@ -332,9 +332,9 @@ class MegatronEngine(BaseEngine):
             with engine.train_mode():
                 # runs in training mode
         """
-        return EngineTrainModeCtx(self)
+        return EngineTrainModeCtx(self, **kwargs)
 
-    def eval_mode(self):
+    def eval_mode(self, **kwargs):
         """
         Context manager entry for switching the engine and model into evaluation mode.
 
@@ -342,7 +342,7 @@ class MegatronEngine(BaseEngine):
             with engine.eval_mode():
                 # runs in evaluation mode
         """
-        return EngineEvalModeCtx(self)
+        return EngineEvalModeCtx(self, **kwargs)
 
     def optimizer_zero_grad(self):
         """
@@ -559,14 +559,15 @@ class MegatronEngine(BaseEngine):
 
 
 class EngineEvalModeCtx:
-    def __init__(self, engine: MegatronEngine):
+    def __init__(self, engine: MegatronEngine, **kwargs):
         self.engine = engine
+        self.disable_auto_offload = kwargs.get('disable_auto_offload', False)
 
     def __enter__(self):
         assert isinstance(self.engine, MegatronEngine)
 
         self.engine.mode = "eval"
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             load_megatron_model_to_gpu(self.engine.module, load_grad=True)
 
         # mcore module is a list of model chunk in each vpp stage
@@ -574,22 +575,23 @@ class EngineEvalModeCtx:
             module.eval()
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             offload_megatron_model_to_cpu(self.engine.module)
         self.engine.mode = None
 
 
 class EngineTrainModeCtx:
-    def __init__(self, engine: MegatronEngine):
+    def __init__(self, engine: MegatronEngine, **kwargs):
         self.engine = engine
+        self.disable_auto_offload = kwargs.get('disable_auto_offload', False)
 
     def __enter__(self):
         assert isinstance(self.engine, MegatronEngine)
 
         self.engine.mode = "train"
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             load_megatron_model_to_gpu(self.engine.module, load_grad=True)
-        if self.engine._is_offload_optimizer:
+        if self.engine._is_offload_optimizer and not self.disable_auto_offload:
             load_megatron_optimizer(self.engine.optimizer)
 
         # mcore module is a list of model chunk in each vpp stage
@@ -597,9 +599,9 @@ class EngineTrainModeCtx:
             module.train()
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.engine._is_offload_param:
+        if self.engine._is_offload_param and not self.disable_auto_offload:
             offload_megatron_model_to_cpu(self.engine.module)
-        if self.engine._is_offload_optimizer:
+        if self.engine._is_offload_optimizer and not self.disable_auto_offload:
             offload_megatron_optimizer(self.engine.optimizer)
         self.engine.mode = None
 

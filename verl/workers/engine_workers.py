@@ -110,6 +110,25 @@ class TrainingWorker(Worker):
         """
         self.engine.initialize()
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def wakeup(self, mode):
+        if mode == 'train':
+            self.engine.train_mode().__enter__()
+        elif mode == 'infer':
+            self.engine.eval_mode().__enter__()
+        else:
+            raise ValueError(f'Unknown mode {mode}')
+
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def sleep(self, mode):
+        if mode == 'train':
+            self.engine.train_mode().__exit__()
+        elif mode == 'infer':
+            self.engine.eval_mode().__exit__()
+        else:
+            raise ValueError(f'Unknown mode {mode}')
+
     def _postprocess_output(self, output, *, global_token_num, delta_time, forward_only):
         """
 
@@ -162,8 +181,10 @@ class TrainingWorker(Worker):
         assert self.loss_fn is not None, "loss function can't be None when calling train_batch"
         # global_token_num should be a list of number of tokens of each seq in this batch
         global_token_num = tu.get(data, key="global_token_num")
+        disable_auto_offload = tu.get(data, key="disable_auto_offload", default=False)
 
-        with self.engine.train_mode(), Timer(name="train_batch", logger=None) as timer:
+        with (self.engine.train_mode(disable_auto_offload=disable_auto_offload),
+              Timer(name="train_batch", logger=None) as timer):
             output = self.engine.train_batch(data, loss_function=self.loss_fn)
             # containing loss, model_output and metrics
             # for training, we only care about loss and metrics
