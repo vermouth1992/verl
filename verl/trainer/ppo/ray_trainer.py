@@ -777,6 +777,9 @@ class RayPPOTrainer:
         self.actor_rollout_wg = all_wg[str(actor_role)]
         self.actor_rollout_wg.init_model()
 
+        if self.ref_in_actor:
+            self.ref_policy_wg = self.actor_rollout_wg
+
         # create async rollout manager and request scheduler
         self.async_rollout_mode = False
         if self.config.actor_rollout_ref.rollout.mode == "async":
@@ -1196,10 +1199,18 @@ class RayPPOTrainer:
                     if self.use_reference_policy:
                         # compute reference log_prob
                         with marked_timer(str(Role.RefPolicy), timing_raw, color="olive"):
-                            if not self.ref_in_actor:
-                                ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
+                            if self.use_legacy_worker_impl == 'disable':
+                                batch_td = batch.to_tensordict()
+                                # step 2: convert from padding to no-padding
+                                batch_td = left_right_2_no_padding(batch_td)
+                                # step 3: add meta info
+                                tu.assign_non_tensor(batch_td, calculate_entropy=False)
+                                output = self.ref_policy_wg.compute_ref_log_prob(batch_td)
+                                ref_log_prob = tu.get(output, 'log_probs')
+                                ref_log_prob = no_padding_2_padding(ref_log_prob, batch_td)
+                                ref_log_prob = tu.get_tensordict({'ref_log_prob': ref_log_prob})
                             else:
-                                ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
+                                ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
 
                     # compute values
@@ -1272,6 +1283,11 @@ class RayPPOTrainer:
                             batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
                             # TODO: Make "temperature" single source of truth from generation.
                             batch.meta_info["temperature"] = rollout_config.temperature
+
+
+                            
+
+
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
