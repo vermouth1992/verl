@@ -301,17 +301,17 @@ def make_iterator(tensordict: TensorDict, mini_batch_size, epochs, seed=None,
     if collate_fn is None:
         collate_fn = lambda x: x
 
-    ind_lst = torch.arange(tensordict.shape[0])
+    idx_lst = torch.arange(tensordict.shape[0])
 
     assert isinstance(dataloader_kwargs, dict)
     train_dataloader = DataLoader(
-        dataset=ind_lst, batch_size=mini_batch_size, collate_fn=collate_fn, generator=generator, **dataloader_kwargs
+        dataset=idx_lst, batch_size=mini_batch_size, collate_fn=collate_fn, generator=generator, **dataloader_kwargs
     )
 
     def get_data():
         for _ in range(epochs):
-            for ind in train_dataloader:
-                yield tensordict[ind]
+            for idx in train_dataloader:
+                yield index_select_tensor_dict(tensordict, idx)
 
     return iter(get_data())
 

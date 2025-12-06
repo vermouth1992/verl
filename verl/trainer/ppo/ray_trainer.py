@@ -1304,13 +1304,14 @@ class RayPPOTrainer:
                                                               epochs=ppo_epochs,
                                                               seed=seed,
                                                               dataloader_kwargs={"shuffle": shuffle})
-
                                 # update
                                 output_ref_lst = []
                                 for batch_idx, mini_batch_td in enumerate(dataloader):
                                     actor_output_ref = self.actor_rollout_wg.train_batch_actor(mini_batch_td)
                                     output_ref_lst.append(actor_output_ref)
                                 actor_output = [output_ref.get() for output_ref in output_ref_lst]
+
+                                breakpoint()
 
                                 actor_output = DataProto.from_tensordict(actor_output)
                             else:

@@ -264,7 +264,13 @@ def test_tensor_dict_make_iterator():
         dataset, mini_batch_size=2, epochs=2, seed=0, dataloader_kwargs={"shuffle": False, "drop_last": False}
     )
 
-    expected_tensor_dict = [dataset[0:2], dataset[2:4], dataset[4:6], dataset[0:2], dataset[2:4], dataset[4:6]]
+    expected_tensor_dict = [tu.index_select_tensor_dict(dataset, indices=list(range(0, 2))),
+                            tu.index_select_tensor_dict(dataset, indices=list(range(2, 4))),
+                            tu.index_select_tensor_dict(dataset, indices=list(range(4, 6))),
+                            tu.index_select_tensor_dict(dataset, indices=list(range(0, 2))),
+                            tu.index_select_tensor_dict(dataset, indices=list(range(2, 4))),
+                            tu.index_select_tensor_dict(dataset, indices=list(range(4, 6)))
+                            ]
 
     i = 0
 
