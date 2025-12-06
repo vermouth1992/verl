@@ -1209,6 +1209,7 @@ class RayPPOTrainer:
                                 ref_log_prob = tu.get(output, 'log_probs')
                                 ref_log_prob = no_padding_2_padding(ref_log_prob, batch_td)
                                 ref_log_prob = tu.get_tensordict({'ref_log_prob': ref_log_prob})
+                                ref_log_prob = DataProto.from_tensordict(ref_log_prob)
                             else:
                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
@@ -1288,7 +1289,29 @@ class RayPPOTrainer:
                                 batch_td = batch.to_tensordict()
                                 # step 2: convert from padding to no-padding
                                 batch_td = left_right_2_no_padding(batch_td)
-                                actor_output = self.actor_rollout_wg.update_actor(batch_td)
+                                calculate_entropy = self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
+                                ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+                                ppo_epochs = self.config.actor_rollout_ref.actor.ppo_epochs
+                                seed = self.config.actor_rollout_ref.actor.data_loader_seed
+                                shuffle = self.config.actor_rollout_ref.actor.shuffle
+                                tu.assign_non_tensor(batch_td,
+                                                     calculate_entropy=calculate_entropy,
+                                                     global_batch_size=ppo_mini_batch_size)
+
+                                # make iterator
+                                dataloader = tu.make_iterator(batch_td,
+                                                              mini_batch_size=ppo_mini_batch_size,
+                                                              epochs=ppo_epochs,
+                                                              seed=seed,
+                                                              dataloader_kwargs={"shuffle": shuffle})
+
+                                # update
+                                output_ref_lst = []
+                                for batch_idx, mini_batch_td in enumerate(dataloader):
+                                    actor_output_ref = self.actor_rollout_wg.train_batch_actor(mini_batch_td)
+                                    output_ref_lst.append(actor_output_ref)
+                                actor_output = [output_ref.get() for output_ref in output_ref_lst]
+
                                 actor_output = DataProto.from_tensordict(actor_output)
                             else:
                                 actor_output = self.actor_rollout_wg.update_actor(batch)

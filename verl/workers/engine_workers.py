@@ -629,6 +629,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             self.actor.reset()
             self.actor.engine.to("cpu")
             self.set_dispatch_collect(mesh_name="actor", **self.actor.get_dispatch_collect())
+            self.actor.set_loss_fn(self.loss_fn)
 
         # 3. build rollout engine
         # - vllm: vLLMAsyncRollout
@@ -684,7 +685,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"), blocking=False)
     @DistProfiler.annotate(color="red", role="actor_update")
-    def train_actor_batch(self, data: TensorDict) -> TensorDict:
+    def train_batch_actor(self, data: TensorDict) -> TensorDict:
         return self.actor.train_batch(data=data)
 
 
