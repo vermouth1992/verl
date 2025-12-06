@@ -31,6 +31,7 @@ import numpy as np
 import ray
 import torch
 from omegaconf import OmegaConf, open_dict
+from tensordict.tensorclass import NonTensorData
 from torch.utils.data import Dataset, Sampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
@@ -1120,7 +1121,7 @@ class RayPPOTrainer:
                         self._balance_batch(batch, metrics=metrics)
 
                     # compute global_valid tokens
-                    batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+                    # batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with marked_timer("reward", timing_raw, color="yellow"):
                         # compute reward model score
@@ -1307,9 +1308,15 @@ class RayPPOTrainer:
                                 # update
                                 output_ref_lst = []
                                 for batch_idx, mini_batch_td in enumerate(dataloader):
+                                    # add global token num
+                                    global_token_num = mini_batch_td['input_ids'].offsets().diff().tolist()
+                                    tu.assign_non_tensor(mini_batch_td, global_token_num=NonTensorData(global_token_num))
                                     actor_output_ref = self.actor_rollout_wg.train_batch_actor(mini_batch_td)
                                     output_ref_lst.append(actor_output_ref)
                                 actor_output = [output_ref.get() for output_ref in output_ref_lst]
+                                actor_output = [tu.get(output, 'metrics') for output in actor_output]
+
+                                # each metric is a list of list (dp and micro-batch)
 
                                 breakpoint()
 
