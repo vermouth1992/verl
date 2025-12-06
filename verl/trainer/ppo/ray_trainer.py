@@ -1121,7 +1121,7 @@ class RayPPOTrainer:
                         self._balance_batch(batch, metrics=metrics)
 
                     # compute global_valid tokens
-                    # batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+                    batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with marked_timer("reward", timing_raw, color="yellow"):
                         # compute reward model score
