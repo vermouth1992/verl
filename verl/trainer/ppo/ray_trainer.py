@@ -1306,6 +1306,7 @@ class RayPPOTrainer:
                                                               seed=seed,
                                                               dataloader_kwargs={"shuffle": shuffle})
                                 # manually wakeup actor
+                                self.actor_rollout_wg.wakeup_actor(mode='train')
 
                                 # update
                                 output_ref_lst = []
@@ -1314,11 +1315,13 @@ class RayPPOTrainer:
                                     global_token_num = mini_batch_td['input_ids'].offsets().diff().tolist()
                                     tu.assign_non_tensor(mini_batch_td,
                                                          global_token_num=NonTensorData(global_token_num),
-                                                         update_lr_scheduler=batch_idx == len(dataloader) - 1)
+                                                         update_lr_scheduler=batch_idx == len(dataloader) - 1,
+                                                         disable_auto_offload=True)
                                     actor_output_ref = self.actor_rollout_wg.train_batch_actor(mini_batch_td)
                                     output_ref_lst.append(actor_output_ref)
 
                                 # manually sleep actor
+                                self.actor_rollout_wg.sleep_actor(mode='train')
 
                                 actor_output = [output_ref.get() for output_ref in output_ref_lst]
                                 actor_output = [tu.get(output, 'metrics') for output in actor_output]

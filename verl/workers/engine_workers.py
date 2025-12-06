@@ -584,6 +584,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self.actor.set_loss_fn(loss_fn=loss_fn)
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def wakeup_actor(self, mode):
+        self.actor.wakeup(mode=mode)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def sleep_actor(self, mode):
+        self.actor.sleep(mode=mode)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         model_config: HFModelConfig = omega_conf_to_dataclass(self.config.model)
 
