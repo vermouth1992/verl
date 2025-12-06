@@ -1283,12 +1283,16 @@ class RayPPOTrainer:
                             batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
                             # TODO: Make "temperature" single source of truth from generation.
                             batch.meta_info["temperature"] = rollout_config.temperature
+                            # update actor
+                            if self.use_legacy_worker_impl == 'disable':
+                                batch_td = batch.to_tensordict()
+                                # step 2: convert from padding to no-padding
+                                batch_td = left_right_2_no_padding(batch_td)
+                                actor_output = self.actor_rollout_wg.update_actor(batch_td)
+                                actor_output = DataProto.from_tensordict(actor_output)
+                            else:
+                                actor_output = self.actor_rollout_wg.update_actor(batch)
 
-
-                            
-
-
-                            actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
 
