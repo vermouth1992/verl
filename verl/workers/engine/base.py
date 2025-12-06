@@ -163,7 +163,9 @@ class BaseEngine:
 
         for key, val in default_keys.items():
             if key not in data.keys():
-                tu.assign_non_tensor(data, key=val)
+                tu.assign_non_tensor(data, **{key: val})
+
+        print(data.keys())
 
         with torch.no_grad():
             outputs = self.forward_backward_batch(data, loss_function, forward_only=True)

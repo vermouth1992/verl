@@ -27,6 +27,14 @@ __all__ = ["FSDPEngineConfig", "McoreEngineConfig", "TrainingWorkerConfig", "Eng
 
 @dataclass
 class EngineConfig(BaseConfig):
+    _mutable_fields = BaseConfig._mutable_fields | {"use_dynamic_bsz",
+                                                 "max_token_len_per_gpu",
+                                                 "micro_batch_size_per_gpu",
+                                                 "infer_max_token_len_per_gpu",
+                                                 "infer_micro_batch_size_per_gpu",
+                                                 "use_fused_kernels",
+                                                 "use_remove_padding"}
+
     # whether to offload param
     param_offload: bool = False
     # whether to offload optimizer
@@ -57,10 +65,12 @@ class EngineConfig(BaseConfig):
     full_determinism: bool = False
 
     def __post_init__(self):
-        if self.use_dynamic_bsz:
-            assert self.max_token_len_per_gpu is not None
-        else:
-            assert self.micro_batch_size_per_gpu is not None
+        pass
+        # TODO: turn on this check after we reorg config
+        # if self.use_dynamic_bsz:
+        #     assert self.max_token_len_per_gpu is not None
+        # else:
+        #     assert self.micro_batch_size_per_gpu is not None
 
 
 
@@ -93,7 +103,7 @@ class McoreEngineConfig(EngineConfig):
     """
 
     # sequence_parallel is not listed as a frozen field for auto-correction purpose
-    _mutable_fields = BaseConfig._mutable_fields | {"sequence_parallel"}
+    _mutable_fields = EngineConfig._mutable_fields | {"sequence_parallel"}
     # mcore parallelism
     tensor_model_parallel_size: int = 1
     expert_model_parallel_size: int = 1
@@ -148,7 +158,7 @@ class FSDPEngineConfig(EngineConfig):
     """
 
     # ulysses_sequence_parallel_size is mutable for backward compatibility
-    _mutable_fields = BaseConfig._mutable_fields | {"ulysses_sequence_parallel_size"}
+    _mutable_fields = EngineConfig._mutable_fields | {"ulysses_sequence_parallel_size"}
 
     # fsdp specific flags
     wrap_policy: dict[str, Any] = field(default_factory=dict)

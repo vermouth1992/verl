@@ -1158,14 +1158,18 @@ class RayPPOTrainer:
                                 tu.assign_non_tensor(batch_td, calculate_entropy=True)
                                 output = self.actor_rollout_wg.compute_log_prob(batch_td)
                                 # gather output
-                                breakpoint()
-
-                                # no_padding_2_padding()
-
+                                entropy = tu.get(output, 'entropy')
+                                log_probs = tu.get(output, 'log_probs')
+                                metrics = tu.get(output, 'metrics')
 
                                 # step 4. No padding to padding
+                                entropy = no_padding_2_padding(entropy, batch_td)
+                                log_probs = no_padding_2_padding(log_probs, batch_td)
 
-                                pass
+                                # step 5: rebuild a tensordict and convert to dataproto
+                                old_log_prob = tu.get_tensordict({'old_log_probs': log_probs.float(),
+                                                                  'entropys': entropy.float()})
+                                old_log_prob = DataProto.from_tensordict(old_log_prob)
                             else:
                                 old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                             entropys = old_log_prob.batch["entropys"]

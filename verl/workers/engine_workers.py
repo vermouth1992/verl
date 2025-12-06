@@ -608,12 +608,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 checkpoint_config=actor_config.checkpoint
             )
 
+            assert self.config.actor.use_dynamic_bsz == self.config.rollout.log_prob_use_dynamic_bsz
+
             # assign engine configs
             actor_training_config.engine_config.use_dynamic_bsz = self.config.actor.use_dynamic_bsz
-            actor_training_config.engine_config.infer_max_token_len_per_gpu = self.config.actor.ppo_infer_max_token_len_per_gpu
-            actor_training_config.engine_config.infer_micro_batch_size_per_gpu = self.config.actor.ppo_infer_micro_batch_size_per_gpu
+            actor_training_config.engine_config.infer_max_token_len_per_gpu = self.config.rollout.log_prob_max_token_len_per_gpu
+            actor_training_config.engine_config.infer_micro_batch_size_per_gpu = self.config.rollout.log_prob_micro_batch_size_per_gpu
             actor_training_config.engine_config.max_token_len_per_gpu = self.config.actor.ppo_max_token_len_per_gpu
             actor_training_config.engine_config.micro_batch_size_per_gpu = self.config.actor.ppo_micro_batch_size_per_gpu
+
+            if self.config.actor.use_dynamic_bsz:
+                assert self.config.rollout.log_prob_max_token_len_per_gpu is not None
+                assert self.config.actor.ppo_max_token_len_per_gpu is not None
+            else:
+                assert self.config.rollout.log_prob_micro_batch_size_per_gpu is not None
+                assert self.config.rollout.ppo_micro_batch_size_per_gpu is not None
 
             self.loss_fn = partial(ppo_loss, config=actor_config)
             self.actor = TrainingWorker(config=actor_training_config)
