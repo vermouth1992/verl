@@ -71,7 +71,8 @@ class MegatronEngine(BaseEngine):
                          checkpoint_config=checkpoint_config)
 
         assert isinstance(self.engine_config, McoreEngineConfig)
-        assert isinstance(self.optimizer_config, McoreOptimizerConfig)
+        if not self.engine_config.forward_only:
+            assert isinstance(self.optimizer_config, McoreOptimizerConfig)
 
 
         self._init_device_mesh()

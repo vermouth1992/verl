@@ -106,7 +106,8 @@ class FSDPEngine(BaseEngine):
                          checkpoint_config=checkpoint_config)
 
         assert isinstance(self.engine_config, FSDPEngineConfig)
-        assert isinstance(self.optimizer_config, FSDPOptimizerConfig)
+        if not self.engine_config.forward_only:
+            assert isinstance(self.optimizer_config, FSDPOptimizerConfig)
 
         self.mode = None
 

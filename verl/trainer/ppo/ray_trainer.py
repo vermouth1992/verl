@@ -1160,18 +1160,17 @@ class RayPPOTrainer:
                                 # gather output
                                 entropy = tu.get(output, 'entropy')
                                 log_probs = tu.get(output, 'log_probs')
-                                metrics = tu.get(output, 'metrics')
-
+                                old_log_prob_mfu = tu.get(output, 'metrics')['mfu']
                                 # step 4. No padding to padding
                                 entropy = no_padding_2_padding(entropy, batch_td)
                                 log_probs = no_padding_2_padding(log_probs, batch_td)
-
                                 # step 5: rebuild a tensordict and convert to dataproto
                                 old_log_prob = tu.get_tensordict({'old_log_probs': log_probs.float(),
                                                                   'entropys': entropy.float()})
                                 old_log_prob = DataProto.from_tensordict(old_log_prob)
                             else:
                                 old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                                old_log_prob_mfu = 0
                             entropys = old_log_prob.batch["entropys"]
                             response_masks = batch.batch["response_mask"]
                             actor_config = self.config.actor_rollout_ref.actor
@@ -1181,7 +1180,8 @@ class RayPPOTrainer:
                                 loss_agg_mode=actor_config.loss_agg_mode,
                                 loss_scale_factor=actor_config.loss_scale_factor,
                             )
-                            old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
+                            old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item(),
+                                                    'perf/mfu/actor_infer': old_log_prob_mfu}
                             metrics.update(old_log_prob_metrics)
                             old_log_prob.batch.pop("entropys")
                             batch = batch.union(old_log_prob)
