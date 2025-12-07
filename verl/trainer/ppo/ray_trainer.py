@@ -18,6 +18,8 @@ PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+
+from itertools import chain
 import json
 import os
 import uuid
@@ -56,6 +58,7 @@ from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, shou
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
 from verl.utils.metric import reduce_metrics
+from verl.utils.py_functional import append_to_dict
 from verl.utils.rollout_skip import RolloutSkip
 from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
@@ -1306,30 +1309,37 @@ class RayPPOTrainer:
                                                               seed=seed,
                                                               dataloader_kwargs={"shuffle": shuffle})
                                 # manually wakeup actor
-                                self.actor_rollout_wg.wakeup_actor(mode='train')
+                                # self.actor_rollout_wg.wakeup_actor(mode='train')
 
                                 # update
                                 output_ref_lst = []
+                                total_num_iterations = batch_td.shape[0] // ppo_mini_batch_size * ppo_epochs
                                 for batch_idx, mini_batch_td in enumerate(dataloader):
                                     # add global token num
                                     global_token_num = mini_batch_td['input_ids'].offsets().diff().tolist()
                                     tu.assign_non_tensor(mini_batch_td,
                                                          global_token_num=NonTensorData(global_token_num),
-                                                         update_lr_scheduler=batch_idx == len(dataloader) - 1,
-                                                         disable_auto_offload=True)
+                                                         update_lr_scheduler=batch_idx == total_num_iterations - 1,
+                                                         disable_auto_offload=False)
                                     actor_output_ref = self.actor_rollout_wg.train_batch_actor(mini_batch_td)
                                     output_ref_lst.append(actor_output_ref)
 
                                 # manually sleep actor
-                                self.actor_rollout_wg.sleep_actor(mode='train')
+                                # self.actor_rollout_wg.sleep_actor(mode='train')
 
                                 actor_output = [output_ref.get() for output_ref in output_ref_lst]
                                 actor_output = [tu.get(output, 'metrics') for output in actor_output]
 
-                                # each metric is a list of list (dp and micro-batch)
+                                # each metric is a list of list (dp and micro-batch) (output[0] is metric in dp[0])
+                                # flatten each metric
+                                agg_actor_output = {}
+                                for output in actor_output:
+                                    for key, val in output.items():
+                                        # flattn dp and micro batch
+                                        output[key] = list(chain.from_iterable(val))
+                                    append_to_dict(agg_actor_output, output)
 
-                                breakpoint()
-
+                                actor_output = tu.get_tensordict(tensor_dict={}, non_tensor_dict={'metrics': agg_actor_output})
                                 actor_output = DataProto.from_tensordict(actor_output)
                             else:
                                 actor_output = self.actor_rollout_wg.update_actor(batch)

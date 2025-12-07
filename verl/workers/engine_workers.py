@@ -123,9 +123,9 @@ class TrainingWorker(Worker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def sleep(self, mode):
         if mode == 'train':
-            self.engine.train_mode().__exit__()
+            self.engine.train_mode().__exit__(None, None, None)
         elif mode == 'infer':
-            self.engine.eval_mode().__exit__()
+            self.engine.eval_mode().__exit__(None, None, None)
         else:
             raise ValueError(f'Unknown mode {mode}')
 
