@@ -1336,11 +1336,11 @@ class RayPPOTrainer:
                                 for output in actor_output:
                                     for key, val in output.items():
                                         # flattn dp and micro batch
-                                        output[key] = list(chain.from_iterable(val))
+                                        if isinstance(val, list):
+                                            output[key] = list(chain.from_iterable(val))
                                     append_to_dict(agg_actor_output, output)
 
-                                actor_output = tu.get_tensordict(tensor_dict={}, non_tensor_dict={'metrics': agg_actor_output})
-                                actor_output = DataProto.from_tensordict(actor_output)
+                                actor_output = DataProto.from_single_dict(data={}, meta_info={"metrics": agg_actor_output})
                             else:
                                 actor_output = self.actor_rollout_wg.update_actor(batch)
 
