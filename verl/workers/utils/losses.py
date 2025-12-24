@@ -53,6 +53,32 @@ def sft_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     return loss, {}
 
 
+def sc_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None):
+    from torch.nn.functional import binary_cross_entropy_with_logits
+
+    pad_mode = tu.get_non_tensor_data(data=data, key="pad_mode", default=DatasetPadMode.NO_PADDING)
+    dp_size = data["dp_size"]
+    values = model_output["values"]
+    global_batch_size = tu.get(data, key="global_batch_size")
+
+    values_rmpad = values.values()
+    cu_seqlens = values.offsets()
+
+    # obtain the value at the last position of each sequence
+    last_pos_value = values_rmpad[cu_seqlens[1:] - 1]
+    labels = tu.get(data, "label")
+
+    labels = torch.tensor(labels, device=last_pos_value.device, dtype=torch.float32)
+
+    # compute BCE loss
+    loss_unreduced = binary_cross_entropy_with_logits(last_pos_value, labels, reduction="none")
+
+    # balance over global
+    loss = torch.sum(loss_unreduced) / global_batch_size * dp_size
+
+    return loss, {}
+
+
 def _slice_response_from_unpad_output(tensor: torch.Tensor, data: TensorDict) -> torch.Tensor:
     """Slice response from unpad model output.
 

@@ -99,12 +99,21 @@ class SFTTrainer:
 
     def _build_engine(self):
         from verl.workers.engine_workers import TrainingWorkerConfig
-        from verl.workers.utils.losses import sft_loss
 
-        self.loss_fn = partial(sft_loss, config=None)
+        model_type = "value_model"
+
+        if model_type == "language_model":
+            from verl.workers.utils.losses import sft_loss
+            self.loss_fn = partial(sft_loss, config=None)
+        elif model_type == "value_model":
+            from verl.workers.utils.losses import sc_loss
+            self.loss_fn = partial(sc_loss, config=None)
+        else:
+            raise ValueError(f"Unsupported model: {model_type}")
+
 
         config = TrainingWorkerConfig(
-            model_type="language_model",
+            model_type=model_type,
             model_config=self.model_config,
             engine_config=self.engine_config,
             optimizer_config=self.optimizer_config,

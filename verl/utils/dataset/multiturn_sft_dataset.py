@@ -353,6 +353,11 @@ class MultiTurnSFTDataset(Dataset):
             }
             if len(multi_modal_inputs) > 0:
                 res["multi_modal_inputs"] = multi_modal_inputs
+
+            label = row_dict.pop("label")
+            if label is not None:
+                res["label"] = label
+
             return res
         elif self.pad_mode == DatasetPadMode.NO_PADDING:
             # truncate input_ids if it is longer than max_length
@@ -369,6 +374,11 @@ class MultiTurnSFTDataset(Dataset):
             }
             if len(multi_modal_inputs) > 0:
                 res["multi_modal_inputs"] = multi_modal_inputs
+
+            label = row_dict.pop("label")
+            if label is not None:
+                res["label"] = label
+
             return res
         else:
             raise ValueError(f"Unknown pad mode {self.pad_mode}")
