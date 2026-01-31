@@ -87,6 +87,7 @@ async def test_server_adapter(init_config):
     )
 
 
+
     # 2.2 create rollout replicas
     rollout_replica_class = get_rollout_replica_class(rollout_config.name)
     rollout_replicas = [
