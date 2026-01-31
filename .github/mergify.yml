@@ -2,7 +2,9 @@ pull_request_rules:
   - name: comment-pre-commit-failure
     description: Comment on PR when pre-commit check fails
     conditions:
-      - "check-failure=pre-commit (3.12)"
+      - check-failure=pre-commit
+      - -closed
+      - -draft
     actions:
       comment:
         message: |
