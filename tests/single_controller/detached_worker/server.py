@@ -28,10 +28,10 @@ from megatron.core.distributed import finalize_model_grads
 from tensordict import TensorDict
 from transformers import LlamaConfig
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.models.mcore.bridge import AutoBridge
 from verl.single_controller.base import Worker
-from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
+from verl.single_controller.base.decorator import Dispatch, make_nd_compute_batch_dispatch_fn, register
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
 from verl.utils.device import get_device_name, get_nccl_backend, get_torch_device
 from verl.utils.megatron.optimizer import get_megatron_optimizer, init_megatron_optim_config
@@ -94,11 +94,11 @@ class Trainer(Worker):
         )
         self.optimizer = get_megatron_optimizer(model=self.module, config=optim_config)
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"))
-    def train_model(self, data: DataProto) -> DataProto:
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="train"))
+    def train_model(self, data: TensorDict) -> TensorDict:
         data = data.to(torch.device(get_device_name(), get_torch_device().current_device()))
-        input_ids = data.batch["input_ids"]
-        if not data.batch["attention_mask"].bool().all():
+        input_ids = data["input_ids"]
+        if not data["attention_mask"].bool().all():
             raise ValueError("This example expects unpadded sequences.")
 
         self.optimizer.zero_grad()
@@ -107,7 +107,7 @@ class Trainer(Worker):
         # layer applies the causal mask; this example has no padding.
         token_losses = self.model(
             input_ids=input_ids,
-            position_ids=data.batch["position_ids"],
+            position_ids=data["position_ids"],
             attention_mask=None,
             labels=torch.roll(input_ids, shifts=-1, dims=-1),
         )
@@ -120,7 +120,7 @@ class Trainer(Worker):
             raise RuntimeError("Megatron optimizer step failed.")
 
         losses = token_losses[:, :-1].detach().mean(dim=-1).cpu()
-        return DataProto(batch=TensorDict({"loss": losses}, batch_size=[input_ids.shape[0]]))
+        return TensorDict({"loss": losses}, batch_size=[input_ids.shape[0]])
 
 
 if __name__ == "__main__":

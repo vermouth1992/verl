@@ -21,7 +21,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import ShardedStateDictConfig, ShardingStrategy, StateDictType
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.device import get_device_id, get_device_name, get_torch_device
 from verl.utils.distributed import initialize_global_process_group
 from verl.utils.fs import copy_to_local
@@ -46,7 +46,7 @@ BASE_HF_ROLLOUT_CONFIG = {
 }
 
 
-def prepare_input_dataproto(tokenizer, config, validate):
+def prepare_input_batch(tokenizer, config, validate):
     preencode_prompts = [
         [{"role": "user", "content": "Who won the Champions League in 2019?"}],
         [{"role": "user", "content": "The founder of Apple is"}],
@@ -57,7 +57,7 @@ def prepare_input_dataproto(tokenizer, config, validate):
         for conversation in preencode_prompts
     ]
     prompts = tokenizer(formatted_prompts, return_tensors="pt", padding="max_length", max_length=config.prompt_length)
-    input_dataproto = DataProto.from_dict(
+    input_batch = tu.batch_from_dict(
         {
             "input_ids": prompts["input_ids"],
             "attention_mask": prompts["attention_mask"],
@@ -70,7 +70,7 @@ def prepare_input_dataproto(tokenizer, config, validate):
             "validate": validate,
         },
     )
-    return input_dataproto
+    return input_batch
 
 
 def prepare_fsdp_model(model, world_size):
@@ -120,35 +120,35 @@ def test_hf_rollout(n: int = 1, do_sample: bool = True, validate: bool = False):
 
     # Initialize HFRollout and start generate
     hf_rollout = HFRollout(fsdp_model, OmegaConf.create(config))
-    input = prepare_input_dataproto(tokenizer, config, validate).to(torch.device(get_device_name(), get_device_id()))
+    input = prepare_input_batch(tokenizer, config, validate).to(torch.device(get_device_name(), get_device_id()))
     outputs = hf_rollout.generate_sequences(input)
 
     # check generated batch size is expected
-    generated_batch_size = outputs.batch.batch_size[0]
-    assert generated_batch_size == input.batch.batch_size[0] * config.n
+    generated_batch_size = outputs.batch_size[0]
+    assert generated_batch_size == input.batch_size[0] * config.n
 
     for i in range(generated_batch_size):
-        prompt_tokens = outputs.batch["prompts"][i]
+        prompt_tokens = outputs["prompts"][i]
         prompt_mask = prompt_tokens != tokenizer.pad_token_id
         prompt_tokens = prompt_tokens[prompt_mask]
         decoded_prompt = tokenizer.decode(prompt_tokens, skip_special_tokens=False)
 
-        response_tokens = outputs.batch["responses"][i]
+        response_tokens = outputs["responses"][i]
         response_mask = response_tokens != tokenizer.pad_token_id
         response_tokens = response_tokens[response_mask]
         decoded_response = tokenizer.decode(response_tokens, skip_special_tokens=False)
 
-        attention_mask = outputs.batch["attention_mask"][i]
-        position_ids = outputs.batch["position_ids"][i]
-        prompt_length = outputs.batch["prompts"].size(1)
-        response_length = outputs.batch["responses"].size(1)
+        attention_mask = outputs["attention_mask"][i]
+        position_ids = outputs["position_ids"][i]
+        prompt_length = outputs["prompts"].size(1)
+        response_length = outputs["responses"].size(1)
 
         assert attention_mask.size(0) == prompt_length + response_length
         assert position_ids.size(0) == prompt_length + response_length
 
         # check response attention mask is expected
         response_attention = attention_mask[prompt_length:]
-        eos_positions = (outputs.batch["responses"][i] == tokenizer.pad_token_id).nonzero(as_tuple=True)[0]
+        eos_positions = (outputs["responses"][i] == tokenizer.pad_token_id).nonzero(as_tuple=True)[0]
         if len(eos_positions) > 0:
             first_eos_pos = eos_positions[0].item()
             assert response_attention[: first_eos_pos + 1].all(), "Response attention mask should be 1 until EOS"

@@ -22,8 +22,9 @@ import torch
 from omegaconf import DictConfig
 from transformers import AutoTokenizer
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.experimental.reward_loop.reward_manager.limited import RateLimitedRewardManager
+from tensordict import TensorDict
 
 
 # Mock API reward functions for testing
@@ -123,23 +124,20 @@ async def mock_dict_result_function(
 
 
 def create_test_data_proto(tokenizer, response_text: str, ground_truth: str, data_source: str = "test"):
-    """Helper to create DataProto for testing."""
+    """Helper to create TensorDict for testing."""
     response_ids = tokenizer.encode(response_text, add_special_tokens=False)
     response_tensor = torch.tensor([response_ids], dtype=torch.long)
     attention_mask = torch.ones_like(response_tensor)
 
-    data = DataProto.from_dict(
+    data = tu.batch_from_dict(
         {
             "responses": response_tensor,
             "attention_mask": attention_mask,
         }
     )
 
-    # Wrap non-tensor values in numpy arrays to match batch dimension
-    data.non_tensor_batch = {
-        "data_source": np.array([data_source], dtype=object),
-        "reward_model": np.array([{"ground_truth": ground_truth}], dtype=object),
-    }
+    tu.assign_non_tensor_stack(data, "data_source", [data_source])
+    tu.assign_non_tensor_stack(data, "reward_model", [{"ground_truth": ground_truth}])
 
     return data
 
@@ -493,7 +491,7 @@ class TestRateLimitedRewardManager:
         )
 
         data = create_test_data_proto(tokenizer, "answer", "answer")
-        data.non_tensor_batch["extra_info"] = np.array([{"custom_field": "test_value"}], dtype=object)
+        tu.assign_non_tensor_stack(data, "extra_info", [{"custom_field": "test_value"}])
 
         await manager.run_single(data)
 

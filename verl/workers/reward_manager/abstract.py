@@ -18,8 +18,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable
 
 import torch
+from tensordict import TensorDict
 
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 
 RawRewardFn = Callable[..., Any]
 
@@ -39,20 +40,20 @@ class AbstractRewardManager(ABC):
     @abstractmethod
     def __call__(
         self,
-        data: DataProto,
+        data: TensorDict,
         return_dict: bool = False,
     ) -> torch.Tensor | dict[str, Any]:
         pass
 
     def _extract_reward_from_rm_scores(
-        self, data: DataProto, return_dict: bool = False
+        self, data: TensorDict, return_dict: bool = False
     ) -> torch.Tensor | dict[str, Any] | None:
         """
         Extract reward from already-computed rm_scores if available.
         This has been deprecated.
 
         Args:
-            data: DataProto object containing the batch data
+            data: TensorDict object containing the batch data
             return_dict: Whether to return a dictionary with reward_tensor and reward_extra_info
 
         Returns:
@@ -61,12 +62,12 @@ class AbstractRewardManager(ABC):
                 - If return_dict=False: torch.Tensor of rm_scores
             If rm_scores doesn't exist: None
         """
-        if "rm_scores" not in data.batch.keys():
+        if "rm_scores" not in data.keys():
             return None
 
         if return_dict:
-            reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
-            reward_extra_info = {key: data.non_tensor_batch[key] for key in reward_extra_keys}
-            return {"reward_tensor": data.batch["rm_scores"], "reward_extra_info": reward_extra_info}
+            reward_extra_keys = tu.item(data, "reward_extra_keys", [])
+            reward_extra_info = {key: tu.item(data, key) for key in reward_extra_keys}
+            return {"reward_tensor": data["rm_scores"], "reward_extra_info": reward_extra_info}
         else:
-            return data.batch["rm_scores"]
+            return data["rm_scores"]

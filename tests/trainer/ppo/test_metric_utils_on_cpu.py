@@ -16,10 +16,11 @@ Tests for the metric utilities in verl.trainer.ppo.metric_utils.
 """
 
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import torch
+from tensordict import TensorDict
 
 from verl.trainer.ppo.metric_utils import (
     bootstrap_metric,
@@ -29,6 +30,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_timing_metrics,
     process_validation_metrics,
 )
+from verl.utils import tensordict_utils as tu
 from verl.utils.metric import (
     reduce_metrics,
 )
@@ -294,9 +296,8 @@ class TestComputeDataMetrics(unittest.TestCase):
 
     def setUp(self):
         """Set up common test data."""
-        # Create a mock DataProto object
-        self.batch = MagicMock()
-        self.batch.batch = {
+        # Create a mock TensorDict object
+        self.batch = tu.get_tensordict({
             "token_level_scores": torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
             "token_level_rewards": torch.tensor([[0.5, 1.0], [1.5, 2.0]]),
             "advantages": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
@@ -316,7 +317,7 @@ class TestComputeDataMetrics(unittest.TestCase):
                 ]
             ),
             "values": torch.tensor([[0.9, 1.0], [1.1, 1.2]]),
-        }
+        })
 
     def test_compute_data_metrics_with_critic(self):
         """Test compute_data_metrics with critic enabled."""
@@ -355,9 +356,8 @@ class TestComputeTimingMetrics(unittest.TestCase):
 
     def setUp(self):
         """Set up common test data."""
-        # Create a mock DataProto object
-        self.batch = MagicMock()
-        self.batch.batch = {
+        # Create a mock TensorDict object
+        self.batch = tu.get_tensordict({
             "responses": torch.zeros((2, 3)),  # 2 samples, 3 response tokens each
             "attention_mask": torch.tensor(
                 [
@@ -365,7 +365,7 @@ class TestComputeTimingMetrics(unittest.TestCase):
                     [1, 1, 1, 1, 1, 1],
                 ]
             ),
-        }
+        })
 
         # Mock the _compute_response_info function to return known values
         self.response_info = {
@@ -432,11 +432,8 @@ class TestComputeThroughputMetrics(unittest.TestCase):
 
     def setUp(self):
         """Set up common test data."""
-        # Create a mock DataProto object
-        self.batch = MagicMock()
-        self.batch.meta_info = {
-            "global_token_num": [100, 200, 300],  # 600 tokens total
-        }
+        # Create a mock TensorDict object
+        self.batch = tu.get_tensordict({}, {"global_token_num": [100, 200, 300]})
 
     def test_compute_throughout_metrics(self):
         """Test compute_throughout_metrics with various timing data."""

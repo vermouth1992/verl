@@ -708,7 +708,7 @@ Teacher logprob computation is interleaved with rollouts inside the **Agent
 Loop**. Each sample's teacher call fires as soon as its rollout finishes (no batch-wide barrier) so teacher work overlaps with the still-running
 rollouts on other samples.
 
-1. **Input.** `AgentLoopManager.generate_sequences(prompts: DataProto)` receives
+1. **Input.** `AgentLoopManager.generate_sequences(prompts: TensorDict)` receives
    a batch of prompts.
 
 2. **Chunking across workers.** The manager splits the batch evenly across its
@@ -773,12 +773,12 @@ rollouts on other samples.
     two tensors `teacher_ids` and `teacher_logprobs`, each of shape `(S, 1 or K)`
     where `S` is the sequence length and `K` is `topk` (or `1`). These are
     stashed on the rollout output and later concatenated into the per-batch
-    `DataProto` for the student training step.
+    `TensorDict` for the student training step.
 
 
 ### Student training
 
-Using the `DataProto` produced by the Agent Loop (rollouts + teacher logprobs in
+Using the `TensorDict` produced by the Agent Loop (rollouts + teacher logprobs in
 `teacher_logprobs`), the student step proceeds as follows.
 
 1. **Train entry.** `TrainingWorker.train_batch` invokes

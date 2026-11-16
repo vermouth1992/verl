@@ -19,9 +19,9 @@ from typing import Any, Callable
 
 import torch
 from omegaconf import DictConfig
+from tensordict import TensorDict
 from transformers import AutoTokenizer
 
-from verl import DataProto
 from verl.utils.ray_utils import get_event_loop
 
 logger = logging.getLogger(__file__)
@@ -55,17 +55,17 @@ class RewardManagerBase(ABC):
         cls._class_initialized = True
 
     @abstractmethod
-    async def run_single(self, data: DataProto):
+    async def run_single(self, data: TensorDict):
         raise NotImplementedError
 
     @classmethod
-    def assemble_rm_scores(cls, data: DataProto, scores: list[float]) -> torch.Tensor:
+    def assemble_rm_scores(cls, data: TensorDict, scores: list[float]) -> torch.Tensor:
         """Assemble per-sample reward scores into the ``rm_scores`` tensor for a batch.
 
         Args:
             data: The concatenated batch passed to :meth:`run_single`.
-                ``data.batch["prompts"]``, ``data.batch["responses"]`` and
-                ``data.batch["attention_mask"]`` are expected to be present
+                ``data["prompts"]``, ``data["responses"]`` and
+                ``data["attention_mask"]`` are expected to be present
                 for the default implementation.
             scores: List of scalar reward scores, one per sample in ``data``.
 
@@ -73,9 +73,9 @@ class RewardManagerBase(ABC):
             torch.Tensor: The ``rm_scores`` tensor with leading dimension equal to
             ``len(data)``.
         """
-        prompt_length = data.batch["prompts"].size(1)
-        valid_response_length = data.batch["attention_mask"][:, prompt_length:].sum(dim=1)
-        rm_scores = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        prompt_length = data["prompts"].size(1)
+        valid_response_length = data["attention_mask"][:, prompt_length:].sum(dim=1)
+        rm_scores = torch.zeros_like(data["responses"], dtype=torch.float32)
         rm_scores[torch.arange(rm_scores.size(0), device=rm_scores.device), valid_response_length - 1] = (
             rm_scores.new_tensor(scores)
         )

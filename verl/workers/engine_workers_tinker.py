@@ -16,7 +16,7 @@ from typing import TypedDict
 from codetiming import Timer
 from tensordict import TensorDict
 
-from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
+from verl.single_controller.base.decorator import Dispatch, make_nd_compute_batch_dispatch_fn, register
 from verl.utils import tensordict_utils as tu
 from verl.utils.profiler import DistProfiler
 from verl.utils.tensordict_utils import maybe_fix_3d_position_ids
@@ -120,7 +120,7 @@ class TinkerTrainingWorker(TrainingWorker):
         with self.engine.train_mode(zero_grad_on_exit=False):
             self.engine.optimizer_zero_grad()
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"), blocking=False)
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="train"), blocking=False)
     @DistProfiler.annotate(color="red", role="forward_backward")
     def forward_backward(self, data: TensorDict) -> TensorDict:
         assert self.loss_fn is not None, "loss function can't be None when calling forward_backward"
@@ -196,7 +196,7 @@ class TinkerActorRolloutRefWorker(ActorRolloutRefWorker):
         assert "actor" in self.role, "optimizer_zero_grad only support actor role"
         return self.actor.optimizer_zero_grad()
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"), blocking=False)
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="actor"), blocking=False)
     def forward_backward(self, data: TensorDict) -> TensorDict:
         assert "actor" in self.role, "forward_backward only support actor role"
         output = self.actor.forward_backward(data=data)

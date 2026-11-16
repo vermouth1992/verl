@@ -20,8 +20,8 @@ import ray
 import torch
 from tensordict import TensorDict
 
-from verl.protocol import DataProto, DataProtoFuture
-from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
+from verl.batch_protocol import BatchFuture
+from verl.single_controller.base.decorator import Dispatch, make_nd_compute_batch_dispatch_fn, register
 from verl.single_controller.base.worker import Worker
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
 from verl.utils import tensordict_utils as tu
@@ -47,23 +47,23 @@ class DecoratorTestWorker(Worker):
         self._register_dispatch_collect_info(mesh_name="train", dp_rank=self.rank, is_collect=True)
 
     # Test method for synchronous DP compute (default behavior)
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def dp_compute(self, data: DataProto) -> DataProto:
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
+    def dp_compute(self, data: TensorDict) -> TensorDict:
         time.sleep(0.1)  # Simulate work
-        rank_value = torch.tensor(self.rank, device=data.batch["input"].device, dtype=data.batch["input"].dtype)
-        data.batch["output"] = data.batch["input"] + self.value + rank_value
+        rank_value = torch.tensor(self.rank, device=data["input"].device, dtype=data["input"].dtype)
+        data["output"] = data["input"] + self.value + rank_value
         return data
 
     # Test async def method with DP compute (default behavior)
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO, blocking=False)
-    async def async_dp_compute(self, data: DataProto) -> DataProto:
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH, blocking=False)
+    async def async_dp_compute(self, data: TensorDict) -> TensorDict:
         # Simulate async work
         await asyncio.sleep(0.1)  # Simulate async work
-        rank_value = torch.tensor(self.rank, device=data.batch["input"].device, dtype=data.batch["input"].dtype)
-        data.batch["output_async"] = data.batch["input"] * 2 + self.value + rank_value
+        rank_value = torch.tensor(self.rank, device=data["input"].device, dtype=data["input"].dtype)
+        data["output_async"] = data["input"] * 2 + self.value + rank_value
         return data
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"), blocking=False)
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="train"), blocking=False)
     def dp_compute_td(self, data: TensorDict) -> TensorDict:
         # note that we have to call contiguous so that we can modify data in plac
         data = tu.contiguous(data)
@@ -81,7 +81,7 @@ class DecoratorTestWorker(Worker):
 # Test function for synchronous DP compute
 def test_decorator_dp_compute(ray_init_shutdown):
     """
-    Tests the default behavior of a synchronous decorated method with DP_COMPUTE_PROTO.
+    Tests the default behavior of a synchronous decorated method with DP_COMPUTE_BATCH.
     Verifies the result correctness.
     """
     num_workers = 2
@@ -93,17 +93,17 @@ def test_decorator_dp_compute(ray_init_shutdown):
 
     # Prepare input data (size 4, for 2 workers)
     input_tensor = torch.arange(4, dtype=torch.float32)
-    data = DataProto(batch=TensorDict({"input": input_tensor}, batch_size=[4]))
+    data = TensorDict({"input": input_tensor}, batch_size=[4])
 
     # Call the decorated method
     output = worker_group.dp_compute(data)
 
     # Assert the result correctness
-    assert isinstance(output, DataProto), "Expected DataProto result"
-    assert "output" in output.batch.keys()
+    assert isinstance(output, TensorDict), "Expected TensorDict result"
+    assert "output" in output.keys()
     assert len(output) == len(data), "Output length should match input length"
 
-    # Expected output calculation for DP_COMPUTE_PROTO with 2 workers
+    # Expected output calculation for DP_COMPUTE_BATCH with 2 workers
     # Worker 0 gets data[0:2], Worker 1 gets data[2:4]
     # Worker 0 adds initial_value(10) + rank(0) = 10
     # Worker 1 adds initial_value(10) + rank(1) = 11
@@ -111,13 +111,13 @@ def test_decorator_dp_compute(ray_init_shutdown):
     expected_output_part2 = torch.tensor([2, 3], dtype=torch.float32) + 10 + 1
     expected_output = torch.cat([expected_output_part1, expected_output_part2])
 
-    torch.testing.assert_close(output.batch["output"], expected_output, msg="Sync DP compute output data mismatch")
+    torch.testing.assert_close(output["output"], expected_output, msg="Sync DP compute output data mismatch")
 
 
 # Test function for async def method with DP compute
 def test_decorator_async_function(ray_init_shutdown):
     """
-    Tests the decorator with an `async def` method using DP_COMPUTE_PROTO.
+    Tests the decorator with an `async def` method using DP_COMPUTE_BATCH.
     Verifies that the call returns a future and the result is correct after .get().
     """
     num_workers = 2
@@ -129,23 +129,23 @@ def test_decorator_async_function(ray_init_shutdown):
 
     # Prepare input data (size 4, for 2 workers)
     input_tensor = torch.arange(4, dtype=torch.float32)
-    data = DataProto(batch=TensorDict({"input": input_tensor}, batch_size=[4]))
+    data = TensorDict({"input": input_tensor}, batch_size=[4])
 
     # Call the async decorated method - this should return a future
-    future_output: DataProtoFuture = worker_group.async_dp_compute(data)
+    future_output: BatchFuture = worker_group.async_dp_compute(data)
 
     # Assert that the call returned a future
-    assert isinstance(future_output, DataProtoFuture), "Expected DataProtoFuture for async def call"
+    assert isinstance(future_output, BatchFuture), "Expected BatchFuture for async def call"
 
     # Get the result (this should block)
     result_data = future_output.get()
 
     # Assert the result correctness
-    assert isinstance(result_data, DataProto)
-    assert "output_async" in result_data.batch.keys()
+    assert isinstance(result_data, TensorDict)
+    assert "output_async" in result_data.keys()
     assert len(result_data) == len(data), "Output length should match input length"
 
-    # Expected output calculation for DP_COMPUTE_PROTO with 2 workers
+    # Expected output calculation for DP_COMPUTE_BATCH with 2 workers
     # Worker 0 gets data[0:2], Worker 1 gets data[2:4]
     # Worker 0 calculates: input * 2 + initial_value(5) + rank(0)
     # Worker 1 calculates: input * 2 + initial_value(5) + rank(1)
@@ -154,7 +154,7 @@ def test_decorator_async_function(ray_init_shutdown):
     expected_output = torch.cat([expected_output_part1, expected_output_part2])
 
     torch.testing.assert_close(
-        result_data.batch["output_async"], expected_output, msg="Async DP compute output data mismatch"
+        result_data["output_async"], expected_output, msg="Async DP compute output data mismatch"
     )
 
 
@@ -185,11 +185,11 @@ def test_decorator_dp_compute_td(ray_init_shutdown):
     output = output.get()
 
     # Assert the result correctness
-    assert isinstance(output, TensorDict), "Expected DataProto result"
+    assert isinstance(output, TensorDict), "Expected TensorDict result"
     assert "output" in output.keys()
     assert len(output) == len(data), "Output length should match input length"
 
-    # Expected output calculation for DP_COMPUTE_PROTO with 2 workers
+    # Expected output calculation for DP_COMPUTE_BATCH with 2 workers
     # Worker 0 gets data[0:2], Worker 1 gets data[2:4]
     # Worker 0 adds initial_value(10) + rank(0) = 10
     # Worker 1 adds initial_value(10) + rank(1) = 11

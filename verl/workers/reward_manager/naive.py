@@ -18,8 +18,9 @@ from contextlib import contextmanager
 from typing import Any, Optional
 
 import torch
+from tensordict import TensorDict
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
 from verl.workers.reward_manager.abstract import AbstractRewardManager
@@ -87,7 +88,7 @@ class NaiveRewardManager(AbstractRewardManager):
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
         self.compute_score_timeout = compute_score_timeout  # per-sample timeout (seconds) for compute_score
 
-    def __call__(self, data: DataProto, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
+    def __call__(self, data: TensorDict, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
@@ -95,34 +96,34 @@ class NaiveRewardManager(AbstractRewardManager):
         if reward_from_rm_scores is not None:
             return reward_from_rm_scores
 
-        reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_tensor = torch.zeros_like(data["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
 
         already_print_data_sources = {}
 
         for i in range(len(data)):
-            data_item = data[i]  # DataProtoItem
+            data_item = data[i]  # TensorDictItem
 
-            prompt_ids = data_item.batch["prompts"]
+            prompt_ids = data_item["prompts"]
 
             prompt_length = prompt_ids.shape[-1]
 
-            valid_prompt_length = data_item.batch["attention_mask"][:prompt_length].sum()
+            valid_prompt_length = data_item["attention_mask"][:prompt_length].sum()
             valid_prompt_ids = prompt_ids[-valid_prompt_length:]
 
-            response_ids = data_item.batch["responses"]
-            valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
+            response_ids = data_item["responses"]
+            valid_response_length = data_item["attention_mask"][prompt_length:].sum()
             valid_response_ids = response_ids[:valid_response_length]
 
             # decode
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
 
-            ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
-            data_source = data_item.non_tensor_batch[self.reward_fn_key]
-            extra_info = data_item.non_tensor_batch.get("extra_info", {})
-            num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
-            rollout_reward_scores = data_item.non_tensor_batch.get("reward_scores", {})
+            ground_truth = tu.item(data_item, "reward_model")["ground_truth"]
+            data_source = tu.item(data_item, self.reward_fn_key)
+            extra_info = tu.item(data_item, "extra_info", {})
+            num_turns = tu.item(data_item, "__num_turns__", None)
+            rollout_reward_scores = tu.item(data_item, "reward_scores", {})
             extra_info["num_turns"] = num_turns
             extra_info["rollout_reward_scores"] = rollout_reward_scores
 

@@ -23,7 +23,7 @@ from transformers.utils import get_json_schema
 
 from tests.experimental.agent_loop.agent_utils import init_agent_loop_manager
 from verl.experimental.agent_loop import get_trajectory_info
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.tools.base_tool import BaseTool, OpenAIFunctionToolSchema
 from verl.tools.schemas import ToolResponse
 from verl.utils import hf_tokenizer
@@ -88,39 +88,37 @@ def test_single_turn(init_config):
         ],
         [{"role": "user", "content": "Let's play a role playing game. Your name is Bob, your favorite color is red."}],
     ]
-    batch = DataProto(
-        non_tensor_batch={
+    batch = tu.get_tensordict({**({}), **({
             "raw_prompt": np.array(raw_prompts),
             "agent_name": np.array(["single_turn_agent"] * len(raw_prompts)),
             "data_source": np.array(["openai/gsm8k"] * len(raw_prompts)),
             "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts)),
-        },
-    )
+        })}, None)
     n = init_config.actor_rollout_ref.rollout.n
-    batch = batch.repeat(n)
+    batch = batch.repeat_interleave(n)
     result = agent_loop_manager.generate_sequences(prompts=batch)
     assert len(result) == len(raw_prompts) * n
 
     # check result
-    seq_len = result.batch["prompts"].size(1) + result.batch["responses"].size(1)
-    assert result.batch["input_ids"].size(1) == seq_len
-    assert result.batch["attention_mask"].size(1) == seq_len
-    assert result.batch["position_ids"].size(1) == seq_len
+    seq_len = result["prompts"].size(1) + result["responses"].size(1)
+    assert result["input_ids"].size(1) == seq_len
+    assert result["attention_mask"].size(1) == seq_len
+    assert result["position_ids"].size(1) == seq_len
 
     if init_config.actor_rollout_ref.rollout.calculate_log_probs:
-        assert result.batch["rollout_log_probs"].size(1) == result.batch["responses"].size(1)
+        assert result["rollout_log_probs"].size(1) == result["responses"].size(1)
 
     # check compute score
-    assert result.batch["rm_scores"].shape == result.batch["responses"].shape
-    reward_tensor = result.batch["rm_scores"]
-    reward_extra_keys = result.meta_info.get("reward_extra_keys", [])
-    reward_extra_info = {key: result.non_tensor_batch[key] for key in reward_extra_keys}
-    assert reward_tensor.shape == result.batch["responses"].shape
+    assert result["rm_scores"].shape == result["responses"].shape
+    reward_tensor = result["rm_scores"]
+    reward_extra_keys = tu.item(result, "reward_extra_keys", [])
+    reward_extra_info = {key: tu.item(result, key) for key in reward_extra_keys}
+    assert reward_tensor.shape == result["responses"].shape
     assert "acc" in reward_extra_info, f"reward_extra_info {reward_extra_info} should contain 'acc'"
     assert reward_extra_info["acc"].shape == (len(result),), f"invalid acc: {reward_extra_info['acc']}"
 
     # check turns
-    num_turns = result.non_tensor_batch["__num_turns__"]
+    num_turns = tu.item(result, "__num_turns__")
     assert np.all(num_turns == 2)
 
     print("Test passed!")
@@ -249,20 +247,18 @@ def test_tool_agent(init_config):
             {"role": "user", "content": "What's the temperature in San Francisco now? How about tomorrow?"},
         ],
     ]
-    batch = DataProto(
-        non_tensor_batch={
+    batch = tu.get_tensordict({**({}), **({
             "raw_prompt": np.array([np.array(prompt) for prompt in raw_prompts], dtype=object),
             "agent_name": np.array(["tool_agent"] * len(raw_prompts)),
             "data_source": np.array(["openai/gsm8k"] * len(raw_prompts)),
             "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts)),
-        },
-    )
-    batch = batch.repeat(n)
+        })}, None)
+    batch = batch.repeat_interleave(n)
     result = agent_loop_manager.generate_sequences(prompts=batch)
     assert len(result) == len(raw_prompts) * n
 
     # Check turns
-    num_turns = result.non_tensor_batch["__num_turns__"]
+    num_turns = tu.item(result, "__num_turns__")
     print(f"num_turns: {num_turns}")
     for i in range(len(num_turns)):
         if i // n == 0:
@@ -274,12 +270,12 @@ def test_tool_agent(init_config):
 
     # Check response_mask
     tokenizer = hf_tokenizer(init_config.actor_rollout_ref.model.path)
-    responses = result.batch["responses"]
-    response_mask = result.batch["response_mask"]
-    attention_mask = result.batch["attention_mask"]
-    assert result.batch["rm_scores"].size(1) == responses.size(1)
+    responses = result["responses"]
+    response_mask = result["response_mask"]
+    attention_mask = result["attention_mask"]
+    assert result["rm_scores"].size(1) == responses.size(1)
     assert responses.size() == response_mask.size(), f"{responses.size()} != {response_mask.size()}"
-    assert result.batch["rollout_log_probs"].size(1) == result.batch["responses"].size(1)
+    assert result["rollout_log_probs"].size(1) == result["responses"].size(1)
 
     response_length = response_mask.size(1)
     for i in range(len(responses)):
@@ -334,19 +330,17 @@ def test_function_tool_agent(init_config):
         [{"role": "user", "content": "Hi! Please reply with a one-word greeting."}],
         [{"role": "user", "content": "What is the current temperature in Tokyo, in celsius?"}],
     ]
-    batch = DataProto(
-        non_tensor_batch={
+    batch = tu.get_tensordict({**({}), **({
             "raw_prompt": np.array([np.array(prompt) for prompt in raw_prompts], dtype=object),
             "agent_name": np.array(["tool_agent"] * len(raw_prompts)),
             "data_source": np.array(["openai/gsm8k"] * len(raw_prompts)),
             "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts)),
-        },
-    )
-    batch = batch.repeat(n)
+        })}, None)
+    batch = batch.repeat_interleave(n)
     result = agent_loop_manager.generate_sequences(prompts=batch)
     assert len(result) == len(raw_prompts) * n
 
-    num_turns = result.non_tensor_batch["__num_turns__"]
+    num_turns = tu.item(result, "__num_turns__")
     print(f"num_turns: {num_turns}")
     greeting_idx = list(range(0, n))
     weather_idx = list(range(n, 2 * n))
@@ -358,9 +352,9 @@ def test_function_tool_agent(init_config):
     )
 
     tokenizer = hf_tokenizer(init_config.actor_rollout_ref.model.path)
-    responses = result.batch["responses"]
-    response_mask = result.batch["response_mask"]
-    attention_mask = result.batch["attention_mask"]
+    responses = result["responses"]
+    response_mask = result["response_mask"]
+    attention_mask = result["attention_mask"]
     response_length = response_mask.size(1)
     saw_stub_value = False
     for i in weather_idx:

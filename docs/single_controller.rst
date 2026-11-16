@@ -74,8 +74,8 @@ with ``@register`` as it will be called in driver script.
 
    class ActorRolloutRefWorker(Worker):
        ...
-       @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-       def generate_sequences(self, prompts: DataProto):
+       @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
+       def generate_sequences(self, prompts: TensorDict):
            prompts = prompts.to(torch.cuda.current_device())
            ...
 
@@ -173,7 +173,7 @@ As show in the flow chart above, these attributes are fed into
 ``func_generator``. However, ``func_generator`` takes ``method_name``,
 ``dispatch_fn``, ``collect_fn``, ``execute_fn``, ``blocking``. We need
 to find the corresponding ``dispatch_fn`` and ``collect_fn`` associated
-with the ``dispatch_mode`` (``DP_COMPUTE_PROTO``) from
+with the ``dispatch_mode`` (``DP_COMPUTE_BATCH``) from
 `DISPATCH_MODE_FN_REGISTRY <https://github.com/verl-project/verl/blob/c59ab2f4788f9a910836a9f2f53dcdb62dfa314e/verl/single_controller/base/decorator.py#L387>`__:
 
 .. code:: python3
@@ -184,7 +184,7 @@ with the ``dispatch_mode`` (``DP_COMPUTE_PROTO``) from
            "collect_fn": collect_all_to_all,
        },
        ...
-       Dispatch.DP_COMPUTE_PROTO: {
+       Dispatch.DP_COMPUTE_BATCH: {
            "dispatch_fn": dispatch_dp_compute_data_proto,
            "collect_fn": collect_dp_compute_data_proto,
        },
@@ -211,12 +211,12 @@ extracted by:
                <<<to be continue 3>>>
 
 In this ``generate_sequences`` cases: -
-``dispatch_mode = Dispatch.DP_COMPUTE_PROTO`` -
+``dispatch_mode = Dispatch.DP_COMPUTE_BATCH`` -
 ``dispatch_fn = dispatch_dp_compute_data_proto`` -
 ``collect_fn = collect_dp_compute_data_proto`` -
 ``execute_fn = RayWorkerGroup.execute_all``
 
-ONE_TO_ALL v.s. DP_COMPUTE_PROTO
+ONE_TO_ALL v.s. DP_COMPUTE_BATCH
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ``dispatch_mode`` is associated with a ``dispatch_fn`` and a
@@ -237,10 +237,10 @@ equals the number of Workers attached to the ``worker_group``:
        kwargs = {k: [v] * worker_group.world_size for k, v in kwargs.items()}
        return args, kwargs
 
-``dispatch_fn`` of ``DP_COMPUTE_PROTO`` is
+``dispatch_fn`` of ``DP_COMPUTE_BATCH`` is
 `dispatch_dp_compute_data_proto <https://github.com/verl-project/verl/blob/c59ab2f4788f9a910836a9f2f53dcdb62dfa314e/verl/single_controller/base/decorator.py#L350>`__,
-which uses ``DataProto.chunk`` to split a large ``DataProto`` into N
-smaller ``DataProto``, where N equals the world_size (number of the
+which uses ``TensorDict.chunk`` to split a large ``TensorDict`` into N
+smaller ``TensorDict``, where N equals the world_size (number of the
 workers) of the ``worker_group``:
 
 .. code:: python
@@ -259,7 +259,7 @@ workers) of the ``worker_group``:
 
 The ``collect_fn`` follows the same pattern and process a batch (list)
 of returned value from all workers of a ``WorkerGroup`` and merge it
-into a list as ``collect_all_to_all`` does or a large ``DataProto`` as
+into a list as ``collect_all_to_all`` does or a large ``TensorDict`` as
 ``collect_dp_compute_data_proto`` does.
 
 Finally, a new method is dynamically generated using ``func_generator``

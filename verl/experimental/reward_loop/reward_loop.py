@@ -23,10 +23,10 @@ from omegaconf import DictConfig, open_dict
 from ray.actor import ActorHandle
 from tensordict import TensorDict
 
-from verl.protocol import DataProto, pad_dataproto_to_divisor
 from verl.single_controller.ray.base import RayResourcePool
 from verl.trainer.ppo.reward import load_reward_manager, resolve_reward_manager_cls
 from verl.utils import hf_tokenizer
+from verl.utils import tensordict_utils as tu
 from verl.utils.fs import copy_to_local
 from verl.utils.ray_utils import get_event_loop
 
@@ -135,14 +135,14 @@ class RewardLoopWorker:
             reward_model_tokenizer=self.reward_model_tokenizer,
         )
 
-    async def compute_score_batch(self, data: DataProto) -> list[dict]:
+    async def compute_score_batch(self, data: TensorDict) -> list[dict]:
         tasks = []
         for i in range(len(data)):
             tasks.append(asyncio.create_task(self.compute_score(data[i : i + 1])))
         outputs = await asyncio.gather(*tasks)
         return outputs
 
-    async def compute_score(self, data: DataProto) -> dict:
+    async def compute_score(self, data: TensorDict) -> dict:
         if self.config.reward.custom_reward_function.path is not None:
             # directly use user-customized reward function
             return await self.reward_manager.run_single(data)
@@ -194,18 +194,18 @@ class RewardLoopWorker:
         if last_exception:
             raise last_exception
 
-    async def _preprocess_reward_inputs(self, data: DataProto) -> str:
+    async def _preprocess_reward_inputs(self, data: TensorDict) -> str:
         assert len(data) == 1, "RewardLoopWorker only support single data item"
         data_item = data[0]
-        assert "raw_prompt" in data_item.non_tensor_batch
+        assert "raw_prompt" in data_item.keys()
 
         # extract raw prompt
-        chat: list = list(data_item.non_tensor_batch["raw_prompt"])
+        chat: list = list(tu.item(data_item, "raw_prompt"))
 
         # extract response
-        response_ids = data_item.batch["responses"]
+        response_ids = data_item["responses"]
         response_length = response_ids.shape[-1]
-        valid_response_length = data_item.batch["attention_mask"][-response_length:].sum()
+        valid_response_length = data_item["attention_mask"][-response_length:].sum()
         valid_response_ids = response_ids[:valid_response_length]
 
         rollout_response = self.input_tokenizer.decode(valid_response_ids)
@@ -228,7 +228,7 @@ class RewardLoopWorker:
 
         return rm_prompt
 
-    async def compute_score_disrm(self, data: DataProto) -> dict:
+    async def compute_score_disrm(self, data: TensorDict) -> dict:
         disrm_prompt = await self._preprocess_reward_inputs(data)
         engine_name = self.config.reward.reward_model.rollout.name
         model_name = self.config.reward.reward_model.model_path
@@ -340,13 +340,13 @@ class RewardLoopManager:
                 ).remote(self.config, self.reward_router_address)
             )
 
-    def compute_rm_score(self, data: DataProto) -> DataProto:
+    def compute_rm_score(self, data: TensorDict) -> TensorDict:
         if self.reward_model_manager is not None:
             self.reward_model_manager.wake_up()
 
         num_workers = len(self.reward_loop_workers)
-        padded_data, pad_size = pad_dataproto_to_divisor(data, num_workers)
-        chunks = padded_data.chunk(num_workers)
+        padded_data, pad_size = tu.pad_to_divisor(data, num_workers)
+        chunks = tu.chunk_tensordict(padded_data, num_workers)
         outputs = ray.get(
             [
                 worker.compute_score_batch.remote(chunk)
@@ -360,8 +360,6 @@ class RewardLoopManager:
         # compute rm score
         scores = [item["reward_score"] for item in outputs_flat]
         rm_scores = self.reward_manager_cls.assemble_rm_scores(data, scores)
-        batch = TensorDict({"rm_scores": rm_scores}, batch_size=len(data))
-
         reward_extra_infos = [output.get("reward_extra_info", {}) for output in outputs_flat]
         reward_extra_keys = list(reward_extra_infos[0].keys())
         non_tensor_batch = {}
@@ -371,8 +369,8 @@ class RewardLoopManager:
         if self.reward_model_manager is not None:
             self.reward_model_manager.sleep()
 
-        return DataProto(
-            batch=batch, non_tensor_batch=non_tensor_batch, meta_info={"reward_extra_keys": reward_extra_keys}
+        return tu.get_tensordict(
+            {"rm_scores": rm_scores, **non_tensor_batch}, {"reward_extra_keys": reward_extra_keys}
         )
 
     def _run_all(self, tasks: list[asyncio.Task]):

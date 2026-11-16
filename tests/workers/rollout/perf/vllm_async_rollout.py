@@ -39,10 +39,11 @@ from torch.utils.data import SequentialSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from tests.experimental.agent_loop.agent_utils import AgentLoopManager, RayWorkerGroup, init_agent_loop_manager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils import hf_tokenizer
 from verl.utils.dataset import RLHFDataset
 from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
+from tensordict import TensorDict
 
 
 def init_config(n_gpus_per_node) -> DictConfig:
@@ -110,7 +111,7 @@ def perf_rollout(mode, backend, n_gpus_per_node, num_steps):
     agent_loop_manager, dataloader = initialize(config, backend)
 
     for step, batch in enumerate(dataloader):
-        batch: DataProto = DataProto.from_single_dict(batch)
+        batch: TensorDict = tu.batch_from_single_dict(batch)
         batch = batch.pop(
             batch_keys=["input_ids", "attention_mask", "position_ids"],
             non_tensor_batch_keys=["raw_prompt_ids", "raw_prompt"],

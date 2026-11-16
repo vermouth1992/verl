@@ -19,9 +19,10 @@ from typing import Any, Callable, Optional
 
 import psutil
 import torch
+from tensordict import TensorDict
 from transformers import PreTrainedTokenizer
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.ray_utils import get_event_loop
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
@@ -122,13 +123,13 @@ class PrimeRewardManager(AbstractRewardManager):
         verify the batch and save as ``acc`` tensor
         """
         # batched scoring
-        prompt_ids = data.batch["prompts"]
+        prompt_ids = data["prompts"]
 
-        response_ids = data.batch["responses"]
+        response_ids = data["responses"]
         sequences_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
-        ground_truth = [data_item.non_tensor_batch["reward_model"]["ground_truth"] for data_item in data]
-        data_sources = data.non_tensor_batch[self.reward_fn_key]
-        extra_info = data.non_tensor_batch.get("extra_info", None)
+        ground_truth = [tu.item(data[i], "reward_model")["ground_truth"] for i in range(len(data))]
+        data_sources = tu.item(data, self.reward_fn_key)
+        extra_info = tu.item(data, "extra_info", None)
 
         assert len(sequences_str) == len(ground_truth) == len(data_sources)
         try:
@@ -146,10 +147,10 @@ class PrimeRewardManager(AbstractRewardManager):
         except Exception as e:
             print(f"[Error] Unexpected error during scoring. Setting all as 0. {e}")
             scores = [0.0 for _ in range(len(sequences_str))]
-        data.batch["acc"] = torch.tensor(scores, dtype=torch.float32, device=prompt_ids.device)
+        data["acc"] = torch.tensor(scores, dtype=torch.float32, device=prompt_ids.device)
         return scores
 
-    def __call__(self, data: DataProto, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
+    def __call__(self, data: TensorDict, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
@@ -157,18 +158,18 @@ class PrimeRewardManager(AbstractRewardManager):
         if reward_from_rm_scores is not None:
             return reward_from_rm_scores
 
-        reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_tensor = torch.zeros_like(data["responses"], dtype=torch.float32)
 
         already_print_data_sources = {}
 
         # batched scoring
-        prompt_ids = data.batch["prompts"]
+        prompt_ids = data["prompts"]
         prompt_length = prompt_ids.shape[-1]
 
-        response_ids = data.batch["responses"]
-        valid_response_length = data.batch["attention_mask"][:, prompt_length:].sum(dim=-1)
+        response_ids = data["responses"]
+        valid_response_length = data["attention_mask"][:, prompt_length:].sum(dim=-1)
         sequences_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
-        data_sources = data.non_tensor_batch["data_source"]
+        data_sources = tu.item(data, "data_source")
 
         scores = self.verify(data)
 

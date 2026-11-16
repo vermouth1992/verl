@@ -29,6 +29,7 @@ GPU integration test ``tests/experimental/reward_loop/test_agent_reward_loop_col
 
 import numpy as np
 import torch
+from tensordict import TensorDict
 
 
 def _lengths_to_mask(lengths: torch.Tensor, width: int) -> torch.Tensor:
@@ -200,7 +201,7 @@ class TestRawPromptObjectArray:
     def test_chunk_and_index_roundtrip(self):
         raw_prompts = [[{"role": "user", "content": str(i)}] for i in range(4)]
         arr = self._build(raw_prompts)
-        # Simulate DataProto.chunk -> np.array_split along axis 0, then per-row index.
+        # Simulate TensorDict.chunk -> np.array_split along axis 0, then per-row index.
         chunks = np.array_split(arr, 2)
         assert len(chunks) == 2
         first_item = chunks[0][0]

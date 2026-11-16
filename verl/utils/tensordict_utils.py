@@ -469,7 +469,7 @@ def get_tensordict(tensor_dict: dict[str, torch.Tensor | list], non_tensor_dict:
     return TensorDict(source=tensor_dict, batch_size=batch_size)
 
 
-def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int]) -> TensorDict:
+def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int] | np.ndarray) -> TensorDict:
     """Select rows from a TensorDict using indices.
 
     Creates a new TensorDict containing only the rows specified by indices.
@@ -478,7 +478,7 @@ def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int
 
     Args:
         batch: The TensorDict to index into. Can be None.
-        indices: 1D tensor or list of integers specifying which rows to select.
+        indices: 1D tensor, list, or numpy array of integers or a boolean mask.
 
     Returns:
         A new TensorDict containing only the selected rows, or None if
@@ -493,10 +493,16 @@ def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int
         - NonTensorStack is indexed by batch dimension
         - NonTensorData (scalar metadata) is preserved unchanged
     """
-    if isinstance(indices, list):
+    if isinstance(indices, np.ndarray):
+        indices = torch.from_numpy(np.ascontiguousarray(indices))
+    elif isinstance(indices, list):
         indices = torch.tensor(indices)
+    elif not isinstance(indices, torch.Tensor):
+        indices = torch.as_tensor(indices)
 
     assert indices.dim() == 1, "indices must be a 1D tensor"
+    if indices.dtype == torch.bool:
+        indices = torch.nonzero(indices, as_tuple=False).flatten()
 
     data_dict = {}
     batch_size = indices.shape[0]
@@ -860,10 +866,10 @@ def pad_to_divisor(data: TensorDict, size_divisor: int):
             take_size = min(remaining_pad, len(data))
             padding_protos.append(data[:take_size])
             remaining_pad -= take_size
-        data_padded = torch.cat([data] + padding_protos)
+        data_padded = concat_tensordict([data] + padding_protos)
     else:
         if len(data) == 0:
-            logging.warning("padding a DataProto with no item, no changed made")
+            logging.warning("padding an empty batch left the batch unchanged")
         pad_size = 0
         data_padded = data
     return data_padded, pad_size
@@ -962,3 +968,283 @@ def list_of_dict_to_tensordict(list_of_dicts: list[dict[str, Any]]) -> TensorDic
     td = TensorDict(final_data, batch_size=[batch_size])
 
     return td
+
+
+AUTO_PADDING_KEY = "_verl_auto_padding"
+_MISSING = object()
+
+
+def item(data: TensorDict, key: str, default: Any = _MISSING) -> Any:
+    """Return a TensorDict field, unwrapping non-tensor containers.
+
+    Tensors are returned unchanged. A per-sample ``NonTensorStack`` becomes a
+    Python list, and batch metadata stored as ``NonTensorData`` is unwrapped.
+
+    Args:
+        data: Batch to read.
+        key: Field name.
+        default: Value returned when ``key`` is absent. Omitting it raises ``KeyError``.
+
+    Returns:
+        The stored value in its native form.
+    """
+    if key not in data.keys():
+        if default is _MISSING:
+            raise KeyError(key)
+        return default
+    value = data.get(key)
+    if isinstance(value, NonTensorData):
+        return value.data
+    if isinstance(value, NonTensorStack):
+        return value.tolist()
+    return value
+
+
+def metadata(data: TensorDict) -> dict[str, Any]:
+    """Return batch-level metadata stored as ``NonTensorData``."""
+    return {key: value.data for key, value in data.items() if isinstance(value, NonTensorData)}
+
+
+def per_sample_arrays(data: TensorDict) -> dict[str, np.ndarray]:
+    """Return per-sample non-tensor fields as NumPy arrays."""
+    arrays = {}
+    for key, value in data.items():
+        if isinstance(value, NonTensorStack):
+            items = value.tolist()
+            array = np.empty(len(items), dtype=object)
+            array[:] = items
+            arrays[key] = array
+    return arrays
+
+
+def batch_from_dict(
+    tensors: dict[str, torch.Tensor] | None = None,
+    non_tensors: dict | None = None,
+    meta_info: dict | None = None,
+    num_batch_dims: int = 1,
+    auto_padding: bool = False,
+) -> TensorDict:
+    """Create a batch from tensor fields, per-sample values, and metadata.
+
+    Args:
+        tensors: Tensor fields sharing the same batch dimensions.
+        non_tensors: Per-sample Python values stored as ``NonTensorStack``.
+        meta_info: Batch-level metadata stored as ``NonTensorData``.
+        num_batch_dims: Number of leading batch dimensions. Values other than 1
+            are only valid when ``non_tensors`` is empty.
+        auto_padding: Mark the batch as eligible for dispatch padding.
+
+    Returns:
+        A TensorDict using the standard batch schema.
+    """
+    assert num_batch_dims > 0, "num_batch_dims must be greater than zero"
+    tensors = {} if tensors is None else dict(tensors)
+    non_tensors = {} if non_tensors is None else dict(non_tensors)
+    meta_info = {} if meta_info is None else dict(meta_info)
+    if non_tensors:
+        assert num_batch_dims == 1, "only support num_batch_dims=1 when non_tensors is not None."
+    if auto_padding:
+        meta_info[AUTO_PADDING_KEY] = True
+    if num_batch_dims != 1:
+        batch_size = next(iter(tensors.values())).shape[:num_batch_dims] if tensors else None
+        data = TensorDict(tensors, batch_size=list(batch_size) if batch_size is not None else [])
+        return assign_non_tensor(data, **meta_info)
+    return get_tensordict({**tensors, **non_tensors}, meta_info)
+
+
+def batch_from_single_dict(
+    data: dict[str, Any], meta_info: dict | None = None, auto_padding: bool = False
+) -> TensorDict:
+    """Split a mixed dictionary into tensors and per-sample arrays, then build a batch."""
+    tensors = {}
+    non_tensors = {}
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            tensors[key] = value
+        elif isinstance(value, np.ndarray):
+            non_tensors[key] = value
+        else:
+            raise ValueError(f"Unsupported type in data {type(value)}")
+    return batch_from_dict(tensors, non_tensors, meta_info, auto_padding=auto_padding)
+
+
+def repeat_batch(data: TensorDict, repeat_times: int = 2, interleave: bool = True) -> TensorDict:
+    """Repeat every row, either interleaved or as repeated blocks.
+
+    Args:
+        data: Batch to repeat.
+        repeat_times: Number of copies of each row.
+        interleave: When true, copies of one row stay together. When false, the
+            whole batch is tiled.
+
+    Returns:
+        A new batch whose length is ``len(data) * repeat_times``.
+    """
+    if interleave:
+        return data.repeat_interleave(repeat_times)
+    return data.repeat(repeat_times)
+
+
+def fold_batch_dim(data: TensorDict, new_batch_size: int) -> TensorDict:
+    """Fold ``[batch, ...]`` into ``[new_batch_size, batch // new_batch_size, ...]``."""
+    batch_size = data.batch_size[0]
+    assert batch_size % new_batch_size == 0, f"{batch_size} is not divisible by {new_batch_size}"
+    group_size = batch_size // new_batch_size
+    tensors: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            if value.is_nested:
+                raise TypeError(f"Cannot fold nested tensor field {key}")
+            tensors[key] = value.reshape(new_batch_size, group_size, *value.shape[1:])
+        elif isinstance(value, NonTensorStack):
+            rows = value.tolist()
+            tensors[key] = [rows[i * group_size : (i + 1) * group_size] for i in range(new_batch_size)]
+        elif isinstance(value, NonTensorData):
+            meta[key] = value.data
+        else:
+            raise TypeError(f"Cannot fold field {key} of type {type(value)}")
+    return get_tensordict(tensors, meta)
+
+
+def unfold_batch_dim(data: TensorDict, batch_dims: int = 2) -> TensorDict:
+    """Flatten the first ``batch_dims`` dimensions back into one batch dimension."""
+    tensors: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            if value.is_nested:
+                raise TypeError(f"Cannot unfold nested tensor field {key}")
+            tensors[key] = value.reshape(-1, *value.shape[batch_dims:])
+        elif isinstance(value, NonTensorStack):
+            flat_rows = []
+            for row in value.tolist():
+                flat_rows.extend(list(row))
+            tensors[key] = flat_rows
+        elif isinstance(value, NonTensorData):
+            meta[key] = value.data
+        else:
+            raise TypeError(f"Cannot unfold field {key} of type {type(value)}")
+    return get_tensordict(tensors, meta)
+
+
+def unfold_column_chunks(data: TensorDict, n_split: int, split_keys: list[str] | None = None) -> TensorDict:
+    """Move ``n_split`` chunks of dimension 1 into the batch dimension.
+
+    Fields in ``split_keys`` are reshaped. Every other per-sample field is repeated
+    so the batch dimension matches.
+
+    Args:
+        data: Batch whose selected fields have a divisible second dimension.
+        n_split: Number of column chunks to unfold.
+        split_keys: Fields to reshape. Other fields are repeated.
+
+    Returns:
+        A batch ``n_split`` times longer than ``data``.
+    """
+    split_keys = set(split_keys or [])
+    tensors: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, NonTensorData):
+            meta[key] = value.data
+        elif isinstance(value, torch.Tensor):
+            if key in split_keys:
+                shape = list(value.shape)
+                shape[0] = value.shape[0] * n_split
+                shape[1] = value.shape[1] // n_split
+                tensors[key] = value.reshape(*shape)
+            else:
+                tensors[key] = torch.repeat_interleave(value, n_split, dim=0)
+        elif isinstance(value, NonTensorStack):
+            rows = value.tolist()
+            if key in split_keys:
+                unfolded = []
+                for row in rows:
+                    row_array = np.asarray(row)
+                    split_shape = list(row_array.shape)
+                    split_shape[0] = row_array.shape[0] // n_split
+                    unfolded.extend(list(row_array.reshape(n_split, *split_shape)))
+                tensors[key] = unfolded
+            else:
+                tensors[key] = [row for row in rows for _ in range(n_split)]
+        else:
+            raise TypeError(f"Cannot unfold columns of field {key} of type {type(value)}")
+    return get_tensordict(tensors, meta)
+
+
+def padding_enabled(data: TensorDict) -> bool:
+    """Return whether dispatch may pad ``data`` to the worker count."""
+    from verl.batch_protocol import BatchPaddingConfig
+
+    return bool(item(data, AUTO_PADDING_KEY, False)) or BatchPaddingConfig.auto_padding
+
+
+def pad_batch(data: TensorDict, padding_size: int, padding_candidate: str = "last") -> TensorDict:
+    """Append copies of the first or last row.
+
+    Args:
+        data: Batch to pad.
+        padding_size: Number of rows to append. Zero returns ``data`` unchanged.
+        padding_candidate: ``"first"`` or ``"last"`` selects the source row.
+
+    Returns:
+        The padded batch.
+    """
+    if padding_size == 0:
+        return data
+    source_index = 0 if padding_candidate == "first" else len(data) - 1
+    padding_part = index_select_tensor_dict(data, [source_index]).repeat_interleave(padding_size)
+    return concat_tensordict([data, padding_part])
+
+
+def all_gather_tensordict(data: TensorDict, process_group) -> TensorDict:
+    """Gather a batch across ``process_group`` and concatenate it on dimension 0.
+
+    Tensor fields use NCCL/device all-gather. Per-sample non-tensor fields use
+    ``all_gather_object``. Batch metadata stays local, matching the historical
+    batch-container behavior.
+
+    Args:
+        data: Batch to gather.
+        process_group: Distributed process group.
+
+    Returns:
+        The concatenated batch on the original tensor device.
+    """
+    from verl.utils.device import get_device_id
+    from verl.utils.torch_functional import allgather_dict_tensors
+
+    group_size = torch.distributed.get_world_size(group=process_group)
+    tensor_keys = []
+    stack_keys = []
+    meta = {}
+    prev_device = None
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            tensor_keys.append(key)
+            if prev_device is None:
+                prev_device = value.device
+        elif isinstance(value, NonTensorStack):
+            stack_keys.append(key)
+        elif isinstance(value, NonTensorData):
+            meta[key] = value.data
+        else:
+            raise TypeError(f"Cannot gather field {key} of type {type(value)}")
+
+    gathered_tensors = {}
+    if tensor_keys:
+        tensor_data = TensorDict(
+            {key: data.get(key) for key in tensor_keys}, batch_size=data.batch_size, device=prev_device
+        )
+        tensor_data = tensor_data.to(get_device_id())
+        gathered = allgather_dict_tensors(tensor_data.contiguous(), size=group_size, group=process_group, dim=0)
+        if prev_device is not None:
+            gathered = gathered.to(prev_device)
+        gathered_tensors = {key: gathered.get(key) for key in tensor_keys}
+
+    for key in stack_keys:
+        gathered_rows = [None for _ in range(group_size)]
+        torch.distributed.all_gather_object(gathered_rows, item(data, key), group=process_group)
+        gathered_tensors[key] = [row for rows in gathered_rows for row in rows]
+    return get_tensordict(gathered_tensors, meta)

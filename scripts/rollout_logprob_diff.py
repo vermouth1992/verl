@@ -58,7 +58,6 @@ import verl
 from verl.checkpoint_engine import CheckpointEngineManager
 from verl.experimental.agent_loop import AgentLoopManager
 from verl.experimental.reward_loop import RewardLoopManager
-from verl.protocol import DataProto
 from verl.single_controller.ray import RayClassWithInitArgs, RayWorkerGroup, ResourcePoolManager
 from verl.single_controller.ray.base import create_colocated_worker_cls
 from verl.trainer.ppo.rollout_corr_helper import compute_offpolicy_metrics
@@ -224,13 +223,13 @@ def init_workers(config: DictConfig) -> tuple[AgentLoopManager, RayWorkerGroup, 
     return agent_loop_manager, actor_rollout_wg, checkpoint_manager
 
 
-def compute_old_log_prob(actor_rollout_wg: RayWorkerGroup, batch: DataProto) -> DataProto:
-    """Same as RayPPOTrainer._compute_old_log_prob."""
-    batch_td = left_right_2_no_padding(batch.to_tensordict())
+def compute_old_log_prob(actor_rollout_wg: RayWorkerGroup, batch):
+    """Recompute actor log probabilities for a generated batch."""
+    batch_td = left_right_2_no_padding(batch)
     tu.assign_non_tensor(batch_td, calculate_entropy=True, compute_loss=False)
     output = actor_rollout_wg.compute_log_prob(batch_td)
     log_probs = no_padding_2_padding(tu.get(output, "log_probs"), batch_td)
-    return DataProto.from_tensordict(tu.get_tensordict({"old_log_probs": log_probs.float()}))
+    return tu.get_tensordict({"old_log_probs": log_probs.float()})
 
 
 def main() -> int:
@@ -254,14 +253,14 @@ def main() -> int:
     agent_loop_manager, actor_rollout_wg, checkpoint_manager = init_workers(config)
 
     raw_prompts = [[{"role": "user", "content": q}] for q in QUESTIONS]
-    batch = DataProto(
-        non_tensor_batch={
-            "raw_prompt": np.array(raw_prompts),
-            "agent_name": np.array(["single_turn_agent"] * len(raw_prompts)),
-            "data_source": np.array(["openai/gsm8k"] * len(raw_prompts)),
-            "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts)),
-        },
-    ).repeat(config.actor_rollout_ref.rollout.n)
+    batch = tu.get_tensordict(
+        {
+            "raw_prompt": raw_prompts,
+            "agent_name": ["single_turn_agent"] * len(raw_prompts),
+            "data_source": ["openai/gsm8k"] * len(raw_prompts),
+            "reward_model": [{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts),
+        }
+    ).repeat_interleave(config.actor_rollout_ref.rollout.n)
 
     refit_runs = []
     for round_index in range(args.refit_rounds):
@@ -269,15 +268,17 @@ def main() -> int:
             checkpoint_manager.update_weights()
         result = agent_loop_manager.generate_sequences(prompts=batch)
         checkpoint_manager.sleep_replicas()
-        result.meta_info.pop("timing", None)
+        tu.pop(result, "timing", None)
+        tu.assign_non_tensor(
+            result,
+            temperature=config.actor_rollout_ref.rollout.temperature,
+            global_token_num=torch.sum(result["attention_mask"], dim=-1).tolist(),
+        )
+        result = tu.union_tensor_dict(result, compute_old_log_prob(actor_rollout_wg, result))
 
-        result.meta_info["temperature"] = config.actor_rollout_ref.rollout.temperature
-        result.meta_info["global_token_num"] = torch.sum(result.batch["attention_mask"], dim=-1).tolist()
-        result = result.union(compute_old_log_prob(actor_rollout_wg, result))
-
-        old_log_probs = result.batch["old_log_probs"]
-        rollout_log_probs = result.batch["rollout_log_probs"]
-        response_mask = result.batch["response_mask"].bool()
+        old_log_probs = result["old_log_probs"]
+        rollout_log_probs = result["rollout_log_probs"]
+        response_mask = result["response_mask"].bool()
 
         metrics = compute_offpolicy_metrics(
             old_log_prob=old_log_probs, rollout_log_prob=rollout_log_probs, response_mask=response_mask

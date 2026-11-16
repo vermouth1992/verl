@@ -71,11 +71,11 @@ Key RPCs
 
    .. code:: python
 
-      @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+      @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="actor"))
       def compute_log_prob(self, data: TensorDict) -> TensorDict:
           return self.actor.infer_batch(data)
 
-      @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="ref"))
+      @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="ref"))
       def compute_ref_log_prob(self, data: TensorDict) -> TensorDict:
           return self.ref.infer_batch(data)
 
@@ -89,7 +89,7 @@ Key RPCs
 
    .. code:: python
 
-      @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+      @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="actor"))
       def update_actor(self, data: TensorDict) -> TensorDict:
           return self.actor.train_mini_batch(data=data)
 
@@ -220,7 +220,7 @@ Legacy (removed)                                                Current (``verl.
 ``verl.workers.critic.DataParallelPPOCritic``                   ``FSDPEngineWithValueHead`` + ``TrainingWorker``
 ``verl.workers.critic.MegatronPPOCritic``                       ``MegatronEngineWithValueHead`` + ``TrainingWorker``
 ``verl.workers.sharding_manager.FSDPUlyssesShardingManager``    ``verl.utils.ulysses.FSDPUlyssesShardingManager``
-``Dispatch.MEGATRON_PP_AS_DP_PROTO``                            ``make_nd_compute_dataproto_dispatch_fn(mesh_name=...)`` (derived from engine)
+``Dispatch.MEGATRON_PP_AS_DP_PROTO``                            ``make_nd_compute_batch_dispatch_fn(mesh_name=...)`` (derived from engine)
 ``use_legacy_worker_impl: True``                                (removed; only the unified engine is available)
 ==============================================================  =========================================================================
 

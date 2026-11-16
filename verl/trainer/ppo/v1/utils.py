@@ -16,11 +16,12 @@ from typing import Any
 
 import numpy as np
 import torch
+from tensordict import TensorDict
 
-from verl.protocol import DataProto
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.trainer_utils import compute_advantage
 from verl.trainer.ppo.v1.replay_buffer import DAPO_FILTERED_REWARD_COUNTS_KEY
+from verl.utils.tensordict_utils import index_select_tensor_dict
 
 
 class MetricsAggregator:
@@ -147,7 +148,7 @@ class MetricsAggregator:
 
 
 def compute_advantage_for_multi_trajectories(
-    data: DataProto,
+    data: TensorDict,
     batch_keys: list[str],
     adv_estimator,
     gamma: float = 1.0,
@@ -155,7 +156,7 @@ def compute_advantage_for_multi_trajectories(
     num_repeat: int = 1,
     norm_adv_by_std_in_grpo: bool = True,
     config: Any = None,
-) -> DataProto:
+) -> TensorDict:
     """Compute GRPO advantages from each session's final output. For non-GRPO
     estimators, such as GAE, are delegated to the original compute_advantage() unchanged.
 
@@ -198,7 +199,7 @@ def compute_advantage_for_multi_trajectories(
 
     # select final sessions from batch data for group relative advantage computation
     final_data = compute_advantage(
-        data.select_idxs(final_indices),
+        index_select_tensor_dict(data, final_indices),
         adv_estimator=adv_estimator,
         gamma=gamma,
         lam=lam,
@@ -206,13 +207,13 @@ def compute_advantage_for_multi_trajectories(
         norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         config=config,
     )
-    first_nnz_indices = final_data.batch["response_mask"].argmax(dim=1)
-    final_scores = final_data.batch["advantages"][torch.arange(len(final_data)), first_nnz_indices]
+    first_nnz_indices = final_data["response_mask"].argmax(dim=1)
+    final_scores = final_data["advantages"][torch.arange(len(final_data)), first_nnz_indices]
 
     # scatter final scores to all rows in batch data
     scores = final_scores[row_to_local_index]
-    scores = scores.unsqueeze(-1) * data.batch["response_mask"]
+    scores = scores.unsqueeze(-1) * data["response_mask"]
 
-    data.batch["advantages"] = scores
-    data.batch["returns"] = scores
+    data["advantages"] = scores
+    data["returns"] = scores
     return data

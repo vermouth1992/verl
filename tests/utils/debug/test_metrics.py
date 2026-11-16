@@ -15,13 +15,13 @@ import unittest
 
 import torch
 
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.debug.metrics import calculate_debug_metrics
 
 
 class TestMetrics(unittest.TestCase):
     def test_calculate_debug_metrics(self):
-        data = DataProto.from_dict(
+        data = tu.batch_from_dict(
             {
                 "rollout_log_probs": torch.tensor(
                     [
@@ -49,7 +49,7 @@ class TestMetrics(unittest.TestCase):
         rollout = torch.tensor([[-0.10000000149, -2.0, -0.5]], dtype=torch.float32)
         actor = torch.tensor([[-0.10000000894, -2.0, -0.75]], dtype=torch.float32)
         assert torch.exp(rollout[0, 0]) == torch.exp(actor[0, 0])
-        data = DataProto.from_dict(
+        data = tu.batch_from_dict(
             {
                 "rollout_log_probs": rollout,
                 "old_log_probs": actor,
@@ -66,7 +66,7 @@ class TestMetrics(unittest.TestCase):
     def test_mismatch_count_follows_the_casted_diff_across_dtypes(self):
         rollout = torch.tensor([[-0.5, -2.0, -0.25]], dtype=torch.bfloat16)
         actor = torch.tensor([[-0.5, -2.0, -0.75]], dtype=torch.float32)
-        data = DataProto.from_dict(
+        data = tu.batch_from_dict(
             {
                 "rollout_log_probs": rollout,
                 "old_log_probs": actor,
@@ -79,7 +79,7 @@ class TestMetrics(unittest.TestCase):
         assert metrics["training/rollout_logprobs_diff_max"] == 0.5
 
     def test_all_masked_returns_invalid(self):
-        data = DataProto.from_dict(
+        data = tu.batch_from_dict(
             {
                 "rollout_log_probs": torch.tensor([[-1.0, -2.0]]),
                 "old_log_probs": torch.tensor([[-1.5, -2.0]]),

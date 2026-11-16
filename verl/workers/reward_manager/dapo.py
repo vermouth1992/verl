@@ -15,8 +15,9 @@
 from collections import defaultdict
 
 import torch
+from tensordict import TensorDict
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
 from verl.workers.reward_manager.abstract import AbstractRewardManager
@@ -55,7 +56,7 @@ class DAPORewardManager(AbstractRewardManager):
                 "To disable the overlong penalty, set overlong_buffer.enable = False"
             )
 
-    def __call__(self, data: DataProto, return_dict: bool = False):
+    def __call__(self, data: TensorDict, return_dict: bool = False):
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
@@ -63,23 +64,23 @@ class DAPORewardManager(AbstractRewardManager):
         if reward_from_rm_scores is not None:
             return reward_from_rm_scores
 
-        reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_tensor = torch.zeros_like(data["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
 
         already_print_data_sources = {}
 
         for i in range(len(data)):
-            data_item = data[i]  # DataProtoItem
+            data_item = data[i]  # TensorDictItem
 
-            prompt_ids = data_item.batch["prompts"]
+            prompt_ids = data_item["prompts"]
 
             prompt_length = prompt_ids.shape[-1]
 
-            valid_prompt_length = data_item.batch["attention_mask"][:prompt_length].sum()
+            valid_prompt_length = data_item["attention_mask"][:prompt_length].sum()
             valid_prompt_ids = prompt_ids[-valid_prompt_length:]
 
-            response_ids = data_item.batch["responses"]
-            valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
+            response_ids = data_item["responses"]
+            valid_response_length = data_item["attention_mask"][prompt_length:].sum()
             valid_response_ids = response_ids[:valid_response_length]
 
             # decode
@@ -89,13 +90,13 @@ class DAPORewardManager(AbstractRewardManager):
             if response_str.endswith(eos_token):
                 response_str = response_str[: -len(eos_token)]
 
-            ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
+            ground_truth = tu.item(data_item, "reward_model")["ground_truth"]
 
-            data_source = data_item.non_tensor_batch[self.reward_fn_key]
+            data_source = tu.item(data_item, self.reward_fn_key)
 
-            extra_info = data_item.non_tensor_batch.get("extra_info", {})
+            extra_info = tu.item(data_item, "extra_info", {})
 
-            rollout_reward_scores = data_item.non_tensor_batch.get("reward_scores", {})
+            rollout_reward_scores = tu.item(data_item, "reward_scores", {})
 
             extra_info["rollout_reward_scores"] = rollout_reward_scores
 

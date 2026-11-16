@@ -19,7 +19,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 
 from tests.experimental.agent_loop.agent_utils import init_agent_loop_manager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.trainer.ppo.utils import create_rl_sampler
 from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
 
@@ -90,10 +90,10 @@ def test_agent_reward_loop_standalone():
 
     # 3. generate responses
     batch_dict = next(iter(dataloader))
-    batch = DataProto.from_single_dict(batch_dict)
+    batch = tu.batch_from_single_dict(batch_dict)
     gen_batch = agent_loop_manager.generate_sequences(prompts=batch)
 
-    rm_scores = gen_batch.batch["rm_scores"]
+    rm_scores = gen_batch["rm_scores"]
     accuracy = rm_scores.sum(dim=-1).mean()
     print(accuracy)
 

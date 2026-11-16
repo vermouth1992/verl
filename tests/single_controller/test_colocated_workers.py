@@ -14,7 +14,7 @@
 
 import ray
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.single_controller.ray.base import (
@@ -24,6 +24,7 @@ from verl.single_controller.ray.base import (
     create_colocated_worker_cls,
 )
 from verl.utils.device import get_device_name
+from tensordict import TensorDict
 
 
 @ray.remote
@@ -31,9 +32,9 @@ class Actor(Worker):
     def __init__(self) -> None:
         super().__init__()
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def add(self, data: DataProto):
-        data.batch["a"] += self.rank
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
+    def add(self, data: TensorDict):
+        data["a"] += self.rank
         return data
 
 
@@ -43,9 +44,9 @@ class Critic(Worker):
         super().__init__()
         self.config = config
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    async def sub(self, data: DataProto):
-        data.batch["a"] -= self.config["b"]
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
+    async def sub(self, data: TensorDict):
+        data["a"] -= self.config["b"]
         return data
 
 
@@ -54,7 +55,7 @@ def test_colocated_workers():
 
     import torch
 
-    data = DataProto.from_dict({"a": torch.zeros(10)})
+    data = tu.batch_from_dict({"a": torch.zeros(10)})
     # create separate workers on the same resource pool
     actor_cls = RayClassWithInitArgs(cls=Actor)
     critic_cls = RayClassWithInitArgs(cls=Critic, config={"b": 10})

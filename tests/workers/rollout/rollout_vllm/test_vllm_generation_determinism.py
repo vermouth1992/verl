@@ -39,7 +39,7 @@ from hydra import compose, initialize_config_dir
 from transformers import AutoTokenizer
 
 from tests.experimental.agent_loop.agent_utils import init_agent_loop_manager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.tokenizer import normalize_token_ids
 from verl.workers.rollout.replica import get_rollout_replica_class
 
@@ -208,24 +208,22 @@ def _compare_logprobs(first, second, label):
 
 
 def _make_agent_loop_batch():
-    return DataProto(
-        non_tensor_batch={
+    return tu.get_tensordict({**({}), **({
             "raw_prompt": np.array([[{"role": "user", "content": p}] for p in PROMPTS], dtype=object),
             "agent_name": np.array(["single_turn_agent"] * len(PROMPTS)),
             "data_source": np.array(["openai/gsm8k"] * len(PROMPTS)),
             "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(PROMPTS)),
-        },
-    )
+        })}, None)
 
 
-def _compare_dataproto_logprobs(first, second, label):
+def _compare_batch_logprobs(first, second, label):
     """Compare rollout_log_probs and responses at valid positions."""
-    lp1 = first.batch["rollout_log_probs"]
-    lp2 = second.batch["rollout_log_probs"]
-    mask1 = first.batch["response_mask"].bool()
-    mask2 = second.batch["response_mask"].bool()
+    lp1 = first["rollout_log_probs"]
+    lp2 = second["rollout_log_probs"]
+    mask1 = first["response_mask"].bool()
+    mask2 = second["response_mask"].bool()
     assert torch.equal(mask1, mask2), f"{label}: response_mask mismatch"
-    assert torch.equal(first.batch["responses"][mask1], second.batch["responses"][mask2]), (
+    assert torch.equal(first["responses"][mask1], second["responses"][mask2]), (
         f"{label}: token IDs mismatch"
     )
     v1 = lp1[mask1]
@@ -298,7 +296,7 @@ def test_agent_loop_determinism_cross_instance():
     r2 = mgr2.generate_sequences(prompts=batch)
     ray.shutdown()
 
-    _compare_dataproto_logprobs(r1, r2, "[agent-loop-cross-instance]")
+    _compare_batch_logprobs(r1, r2, "[agent-loop-cross-instance]")
     print("✓ AgentLoop cross-instance determinism verified")
 
 

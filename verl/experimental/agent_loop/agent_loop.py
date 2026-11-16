@@ -45,9 +45,9 @@ from pydantic import BaseModel, ConfigDict
 from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
 
-from verl.protocol import DataProto
 from verl.tools.tool_registry import load_all_tools
 from verl.trainer.distillation import is_distillation_enabled
+from verl.utils import tensordict_utils as tu
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.dataset.rl_dataset import RLHFDataset, get_dataset_class
 from verl.utils.import_utils import resolve_config_path
@@ -650,14 +650,14 @@ class AgentLoopWorker:
                 mm_processor_kwargs["sampling_rate"] = int(sampling_rate)
         return mm_processor_kwargs
 
-    async def generate_sequences(self, batch: DataProto) -> DataProto:
+    async def generate_sequences(self, batch: TensorDict) -> TensorDict:
         """Generate sequences from agent loop.
 
         Args:
-            batch (DataProto): Input batch.
+            batch (TensorDict): Input batch.
 
         Returns:
-            DataProto: Output batch.
+            TensorDict: Output batch.
             - prompts: [bsz, prompt_length], prompt token ids from dataset.
             - responses: [bsz, response_length], output token ids include response tokens
               from LLM generation and observation tokens from tool_calls.
@@ -672,7 +672,7 @@ class AgentLoopWorker:
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
         config = self.rollout_config
-        validate = batch.meta_info.get("validate", False)
+        validate = tu.item(batch, "validate", False)
         sampling_params = dict(
             temperature=config.temperature,
             top_p=config.top_p,
@@ -694,12 +694,15 @@ class AgentLoopWorker:
             sampling_params["temperature"] = config.val_kwargs.temperature
 
         # by default, we assume it's a single turn agent
-        if "agent_name" not in batch.non_tensor_batch:
+        samples = tu.per_sample_arrays(batch)
+        if "agent_name" not in samples:
             default_agent_loop = config.agent.default_agent_loop
-            batch.non_tensor_batch["agent_name"] = np.array([default_agent_loop] * len(batch), dtype=object)
+            agent_names = [default_agent_loop] * len(batch)
+            tu.assign_non_tensor_stack(batch, "agent_name", agent_names)
+            samples["agent_name"] = np.array(agent_names, dtype=object)
 
-        if "index" in batch.non_tensor_batch:
-            index = batch.non_tensor_batch["index"]
+        if "index" in samples:
+            index = samples["index"]
         else:
             index = np.arange(len(batch))
 
@@ -720,16 +723,16 @@ class AgentLoopWorker:
             traced_indices = set(range(len(batch)))
 
         trajectory_info = await get_trajectory_info(
-            batch.meta_info.get("global_steps", -1), index.tolist(), batch.meta_info.get("validate", False)
+            tu.item(batch, "global_steps", -1), index.tolist(), tu.item(batch, "validate", False)
         )
 
         # NOTE: __do_sample__ is an internal per-sample override used by REMAX combined rollout.
         # Do not forward it to concrete agent loops, which may reject unknown kwargs.
-        per_sample_do_sample = batch.non_tensor_batch.get("__do_sample__")
+        per_sample_do_sample = samples.get("__do_sample__")
         tasks = []
         for i in range(len(batch)):
             trace_this_sample = i in traced_indices
-            kwargs = {k: v[i] for k, v in batch.non_tensor_batch.items() if k != "__do_sample__"}
+            kwargs = {k: v[i] for k, v in samples.items() if k != "__do_sample__"}
             sample_sampling_params = dict(sampling_params)
             if not validate and per_sample_do_sample is not None and not bool(per_sample_do_sample[i]):
                 apply_greedy_sampling_params(sample_sampling_params)
@@ -741,7 +744,7 @@ class AgentLoopWorker:
         outputs = await asyncio.gather(*tasks)
 
         output = self._postprocess(
-            outputs, input_non_tensor_batch=batch.non_tensor_batch, validate=batch.meta_info.get("validate", False)
+            outputs, input_non_tensor_batch=samples, validate=tu.item(batch, "validate", False)
         )
         return output
 
@@ -1105,10 +1108,9 @@ class AgentLoopWorker:
                     "response_len": np.array([len(o.response_ids) for o in outputs]),
                 }
 
-                data = DataProto(
-                    batch=batch,
-                    non_tensor_batch=non_tensor_batch,
-                )
+                merged = {key: batch.get(key) for key in batch.keys()}
+                merged.update(non_tensor_batch)
+                data = tu.get_tensordict(merged)
                 selected_reward_loop_worker_handle = random.choice(self.reward_loop_worker_handles)
                 result = await selected_reward_loop_worker_handle.compute_score.remote(data)
                 final_output.reward_score = result["reward_score"]
@@ -1146,7 +1148,7 @@ class AgentLoopWorker:
         inputs: list[_InternalAgentLoopOutput],
         input_non_tensor_batch: dict | None = None,
         validate: bool = False,
-    ) -> DataProto:
+    ) -> TensorDict:
         """Process the padded outputs from _run_agent_loop and combine them into a batch."""
         # Convert lists back to tensors and stack them to create a batch.
         prompt_ids = torch.cat([input.prompt_ids for input in inputs], dim=0)
@@ -1228,11 +1230,9 @@ class AgentLoopWorker:
         else:
             meta_info = {"metrics": metrics}
 
-        return DataProto(
-            batch=batch,
-            non_tensor_batch=non_tensor_batch,
-            meta_info=meta_info,
-        )
+        merged = {key: batch.get(key) for key in batch.keys()}
+        merged.update(non_tensor_batch)
+        return tu.get_tensordict(merged, meta_info)
 
 
 async def get_trajectory_info(step, index, validate):
@@ -1315,38 +1315,36 @@ class AgentLoopManager:
             )
 
     @auto_await
-    async def generate_sequences(self, prompts: DataProto) -> DataProto:
+    async def generate_sequences(self, prompts: TensorDict) -> TensorDict:
         """Split input batch and dispatch to agent loop workers.
 
         Args:
-            prompts (DataProto): Input batch.
+            prompts (TensorDict): Input batch.
 
         Returns:
-            DataProto: Output batch.
+            TensorDict: Output batch.
         """
         # Attach per-sample priority to the batch (like ``uid``) so each sample gets
         # a globally-unique priority that flows to vLLM request scheduling. Assigned
         # before chunking so chunks own disjoint ranges without per-worker offsets.
-        if "priority" not in prompts.non_tensor_batch:
-            prompts.non_tensor_batch["priority"] = np.arange(len(prompts), dtype=np.int64)
+        if "priority" not in prompts.keys():
+            tu.assign_non_tensor_stack(prompts, "priority", np.arange(len(prompts), dtype=np.int64).tolist())
 
-        chunkes = prompts.chunk(len(self.agent_loop_workers))
+        chunkes = tu.chunk_tensordict(prompts, len(self.agent_loop_workers))
         outputs = await asyncio.gather(
             *[
                 worker.generate_sequences.remote(chunk)
                 for worker, chunk in zip(self.agent_loop_workers, chunkes, strict=True)
             ]
         )
-        output = DataProto.concat(outputs)
+        metrics = [tu.pop(output, "metrics") for output in outputs]
+        output = tu.concat_tensordict(outputs)
 
-        # calculate performance metrics
-        metrics = [output.meta_info.pop("metrics") for output in outputs]  # List[List[Dict[str, str]]]
         timing = self._performance_metrics(metrics, output)
-
-        output.meta_info = {"timing": timing, **outputs[0].meta_info}
+        tu.assign_non_tensor(output, timing=timing)
         return output
 
-    def _performance_metrics(self, metrics: list[list[dict[str, str]]], output: DataProto) -> dict[str, float]:
+    def _performance_metrics(self, metrics: list[list[dict[str, str]]], output: TensorDict) -> dict[str, float]:
         timing = {}
         t_generate_sequences = np.array([metric["generate_sequences"] for chunk in metrics for metric in chunk])
         t_tool_calls = np.array([metric["tool_calls"] for chunk in metrics for metric in chunk])
@@ -1367,14 +1365,14 @@ class AgentLoopManager:
 
         # batch sequence generation is bounded by the slowest sample
         slowest = np.argmax(t_generate_sequences + t_tool_calls + t_compute_score)
-        prompt_length = output.batch["prompts"].shape[1]
+        prompt_length = output["prompts"].shape[1]
         timing["agent_loop/slowest/generate_sequences"] = t_generate_sequences[slowest]
         timing["agent_loop/slowest/tool_calls"] = t_tool_calls[slowest]
         timing["agent_loop/slowest/compute_score"] = t_compute_score[slowest]
         timing["agent_loop/slowest/num_preempted"] = num_preempted[slowest]
 
-        if "attention_mask" in output.batch:
-            attention_mask = output.batch["attention_mask"][slowest]
+        if "attention_mask" in output.keys():
+            attention_mask = output["attention_mask"][slowest]
             timing["agent_loop/slowest/prompt_length"] = attention_mask[:prompt_length].sum().item()
             timing["agent_loop/slowest/response_length"] = attention_mask[prompt_length:].sum().item()
 

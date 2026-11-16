@@ -41,7 +41,7 @@ except ImportError:
     revert_weight_conversion = None
     pass
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
 from verl.trainer.config import CheckpointConfig
 from verl.utils import tensordict_utils as tu
@@ -180,7 +180,7 @@ def test_actor_engine(strategy):
 
     assert torch.all(response_mask[:, 0] == 1)
 
-    data = DataProto.from_single_dict(
+    data = tu.batch_from_single_dict(
         {
             "input_ids": input_ids,
             "prompts": input_ids[:, :response_length],
@@ -201,7 +201,7 @@ def test_actor_engine(strategy):
     logprobs_unpad = tu.get(output, "log_probs").cpu()
     logprobs = no_padding_2_padding(logprobs_unpad, data_td)
 
-    output = DataProto.from_single_dict({"old_log_probs": logprobs})
+    output = tu.batch_from_single_dict({"old_log_probs": logprobs})
 
     # load hf model and compare results with hf model
     path = config.model_config.path
@@ -211,13 +211,13 @@ def test_actor_engine(strategy):
         hf_output.logits[:, -response_length - 1 : -1, :].float(), input_ids[:, -response_length:]
     )
     hf_logprobs_mean = torch.mean(hf_logprobs * response_mask)
-    mcore_logprobs_mean = torch.mean(output.batch["old_log_probs"] * response_mask)
+    mcore_logprobs_mean = torch.mean(output["old_log_probs"] * response_mask)
 
     torch.testing.assert_close(hf_logprobs_mean, mcore_logprobs_mean, atol=1e-3, rtol=1e-2, check_dtype=False)
 
     data = data.union(output)
 
-    # TODO: sft_loss_ is not compatible with ActorWorker until we replace DataProto with torch.jagged TensorDict
+    # TODO: sft_loss_ is not compatible with ActorWorker until we replace TensorDict with torch.jagged TensorDict
     # wg.set_loss_fn(sft_loss_)
 
     # train for one step
@@ -225,8 +225,8 @@ def test_actor_engine(strategy):
     # print(metrics)
 
     # add ppo data
-    data.batch["advantages"] = torch.rand_like(responses, dtype=torch.float32)
-    data.batch["ref_log_prob"] = torch.rand_like(responses, dtype=torch.float32)
+    data["advantages"] = torch.rand_like(responses, dtype=torch.float32)
+    data["ref_log_prob"] = torch.rand_like(responses, dtype=torch.float32)
 
     # construct actor config
     actor_config = ActorConfig(strategy=strategy, rollout_n=1, ppo_micro_batch_size_per_gpu=-1)
@@ -313,7 +313,7 @@ def test_critic_engine(strategy, tmp_path):
 
     assert torch.all(response_mask[:, 0] == 1)
 
-    data = DataProto.from_single_dict(
+    data = tu.batch_from_single_dict(
         {
             "input_ids": input_ids,
             "prompts": input_ids[:, :response_length],
@@ -335,7 +335,7 @@ def test_critic_engine(strategy, tmp_path):
     values_unpad = tu.get(output, "values").float().cpu()
     values = no_padding_2_padding(values_unpad, data_td)
 
-    output = DataProto.from_single_dict({"values": values})
+    output = tu.batch_from_single_dict({"values": values})
 
     # load hf model and compare results with hf model
     with torch.device(device_name), torch.autocast(device_type=device_name, dtype=torch.bfloat16):
@@ -346,14 +346,14 @@ def test_critic_engine(strategy, tmp_path):
         hf_values = hf_output.logits[:, -response_length - 1 : -1, :].float().squeeze(-1).cpu()
 
     hf_values_mean = torch.mean(hf_values * response_mask)
-    engine_values = torch.mean(output.batch["values"] * response_mask)
+    engine_values = torch.mean(output["values"] * response_mask)
 
     torch.testing.assert_close(hf_values_mean, engine_values, atol=1e-2, rtol=1e-2)
 
     data = data.union(output)
 
     # add ppo data
-    data.batch["returns"] = torch.rand_like(responses, dtype=torch.float32)
+    data["returns"] = torch.rand_like(responses, dtype=torch.float32)
 
     # update again
     # create critic config
@@ -599,7 +599,7 @@ def _make_split_step_batch(config: HFModelConfig, engine_config: FSDPEngineConfi
     responses = input_ids[:, -response_length:]
     response_mask = torch.ones_like(responses)
 
-    data = DataProto.from_single_dict(
+    data = tu.batch_from_single_dict(
         {
             "input_ids": input_ids,
             "prompts": input_ids[:, : seq_len - response_length],

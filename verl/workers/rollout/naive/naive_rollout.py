@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 from torch import nn
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.torch_functional import logprobs_from_logits
 
 from ..base import BaseRollout
@@ -48,14 +48,14 @@ class NaiveRollout(BaseRollout):
         self.module = module
 
     @torch.no_grad()
-    def generate_sequences(self, prompts: DataProto) -> DataProto:
+    def generate_sequences(self, prompts: TensorDict) -> TensorDict:
         """Generate sequences"""
-        idx = prompts.batch["input_ids"]  # (bs, prompt_length)
-        attention_mask = prompts.batch["attention_mask"]  # left-padded attention_mask
-        position_ids = prompts.batch["position_ids"]
+        idx = prompts["input_ids"]  # (bs, prompt_length)
+        attention_mask = prompts["attention_mask"]  # left-padded attention_mask
+        position_ids = prompts["position_ids"]
 
         # used to construct attention_mask
-        eos_token_id = prompts.meta_info["eos_token_id"]
+        eos_token_id = tu.item(prompts, "eos_token_id")
 
         batch_size = idx.size(0)
         prompt_length = idx.size(1)
@@ -117,4 +117,4 @@ class NaiveRollout(BaseRollout):
 
         self.module.train()
 
-        return DataProto(batch=batch)
+        return batch

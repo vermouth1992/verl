@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Replace DataProto with raw TensorDict
+Replace TensorDict with raw TensorDict
 """
 
 import copy
@@ -25,6 +25,7 @@ import torch
 from tensordict.tensorclass import NonTensorData, NonTensorStack
 
 from verl.utils import tensordict_utils as tu
+from tensordict import TensorDict
 
 
 def test_union_tensor_dict():
@@ -431,7 +432,7 @@ def test_get():
 
 
 def test_repeat():
-    # Create a DataProto object with some batch and non-tensor data
+    # Create a TensorDict object with some batch and non-tensor data
     obs = torch.tensor([[1, 2], [3, 4], [5, 6]])
     labels = ["a", "b", "c"]
     data = tu.get_tensordict({"obs": obs, "labels": labels}, non_tensor_dict={"info": "test_info"})
@@ -455,7 +456,7 @@ def test_repeat():
     assert repeated_data_no_interleave["info"] == "test_info"
 
 
-def test_dataproto_pad_unpad():
+def test_batch_pad_unpad():
     obs = torch.tensor([[1, 2], [3, 4], [5, 6]])
     labels = ["a", "b", "c"]
     data = tu.get_tensordict(tensor_dict={"obs": obs, "labels": labels}, non_tensor_dict={"info": "test_info"})
@@ -541,7 +542,7 @@ def test_len():
     assert len(data) == 0
 
 
-def test_dataproto_index():
+def test_batch_index():
     data_len = 100
     idx_num = 10
 
@@ -614,7 +615,7 @@ def test_select():
     assert "1" not in subset.keys()
 
 
-def test_dataproto_no_batch():
+def test_batch_no_batch():
     labels = ["a", "b", "c"]
     data = tu.get_tensordict(tensor_dict={"labels": labels}, non_tensor_dict={"info": "test_info"})
     selected = data.select("labels")
@@ -626,7 +627,7 @@ def test_dataproto_no_batch():
 
 
 def test_sample_level_repeat():
-    # Create a DataProto object with some batch and non-tensor data
+    # Create a TensorDict object with some batch and non-tensor data
     obs = torch.tensor([[1, 2], [3, 4], [5, 6]])
     labels = ["a", "b", "c"]
 
@@ -651,7 +652,7 @@ def test_sample_level_repeat():
     assert repeated_data_no_interleave["info"] == "test_info"
 
 
-def test_dataproto_chunk_after_index():
+def test_batch_chunk_after_index():
     data_len = 4
     obs = torch.randn(data_len, 4)
     labels = [f"label_{i}" for i in range(data_len)]
@@ -1170,3 +1171,33 @@ def test_contiguous():
     data_cont.consolidate()
 
     tu.assert_tensordict_eq(data_cont, data)
+
+
+def test_fold_and_unfold_batch_dim():
+    obs = torch.tensor([[1, 2], [3, 4], [5, 6]])
+    labels = ["a", "b", "c"]
+    data = tu.get_tensordict({"obs": obs, "labels": labels}, {"info": "test_info"})
+    repeated = tu.repeat_batch(data, repeat_times=2, interleave=True)
+    folded = tu.fold_batch_dim(repeated, new_batch_size=3)
+
+    torch.testing.assert_close(folded["obs"], torch.tensor([[[1, 2], [1, 2]], [[3, 4], [3, 4]], [[5, 6], [5, 6]]]))
+    assert tu.item(folded, "labels") == [["a", "a"], ["b", "b"], ["c", "c"]]
+
+    reordered = tu.index_select_tensor_dict(folded, torch.tensor([1, 2, 0]))
+    unfolded = tu.unfold_batch_dim(reordered, batch_dims=2)
+    torch.testing.assert_close(unfolded["obs"], torch.tensor([[3, 4], [3, 4], [5, 6], [5, 6], [1, 2], [1, 2]]))
+    assert tu.item(unfolded, "labels") == ["b", "b", "c", "c", "a", "a"]
+    assert tu.metadata(unfolded) == {"info": "test_info"}
+
+
+def test_bool_index_select_and_pickle_roundtrip():
+    data = tu.get_tensordict({"obs": torch.tensor([[1], [2], [3], [4]]), "labels": ["a", "b", "c", "d"]}, {"step": 1})
+    selected = tu.index_select_tensor_dict(data, torch.tensor([True, False, True, False]))
+    assert torch.equal(selected["obs"], torch.tensor([[1], [3]]))
+    assert tu.item(selected, "labels") == ["a", "c"]
+    assert tu.metadata(selected) == {"step": 1}
+
+    import pickle
+
+    restored = pickle.loads(pickle.dumps(data))
+    tu.assert_tensordict_eq(restored, data)

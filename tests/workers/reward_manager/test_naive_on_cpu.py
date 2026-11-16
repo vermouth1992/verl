@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.workers.reward_manager.naive import NaiveRewardManager, _score_timeout
 
 
@@ -31,7 +31,7 @@ class _DummyTokenizer:
 
 def _make_minimal_data(batch_size=1, prompt_len=2, response_len=2):
     total = prompt_len + response_len
-    return DataProto.from_single_dict(
+    return tu.batch_from_single_dict(
         {
             "prompts": torch.zeros((batch_size, prompt_len), dtype=torch.long),
             "responses": torch.zeros((batch_size, response_len), dtype=torch.long),

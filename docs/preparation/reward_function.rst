@@ -20,16 +20,16 @@ we implement a ``RewardManager`` that utilize pre-implemented reward functions t
 In the ``RewardManager``, we implemented a ``__call__`` function to
 compute the score for each response. 
 All the reward functions are executed by ``compute_score_fn``.
-The input is a ``DataProto``, which includes:
+The input is a ``TensorDict``, which includes:
 
 - ``input_ids``, ``attention_mask``: ``input_ids`` and ``attention_mask`` after applying
   chat_template, including prompt and response
 - ``responses``: response tokens
 - ``ground_truth``: The ground truth string of the current prompt.
-  Stored in ``non_tensor_batch`` in the ``DataProto``, which should be
+  Stored in ``non_tensor_batch`` in the ``TensorDict``, which should be
   preprocessed in the parquet files.
 - ``data_source``: The dataset name of the current prompt. Stored in
-  ``non_tensor_batch`` in the ``DataProto``, which should be
+  ``non_tensor_batch`` in the ``TensorDict``, which should be
   preprocessed in the parquet files.
 
 After detokenize the responses, the responses string and the ground

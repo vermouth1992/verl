@@ -18,13 +18,14 @@ import torch
 from hydra import compose, initialize_config_dir
 
 from verl.experimental.reward_loop import RewardLoopManager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils import hf_tokenizer
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.tokenizer import normalize_token_ids
+from tensordict import TensorDict
 
 
-def create_data_samples(tokenizer, min_samples) -> DataProto:
+def create_data_samples(tokenizer, min_samples) -> TensorDict:
     convs = [
         [
             {
@@ -88,7 +89,7 @@ def create_data_samples(tokenizer, min_samples) -> DataProto:
     attention_masks = torch.stack(attention_masks)
     position_ids = compute_position_id_with_mask(attention_masks)
 
-    data = DataProto.from_dict(
+    data = tu.batch_from_dict(
         tensors={
             "prompts": prompts,
             "responses": responses,

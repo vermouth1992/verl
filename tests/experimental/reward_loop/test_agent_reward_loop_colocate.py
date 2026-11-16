@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 from verl.checkpoint_engine import CheckpointEngineManager
 from verl.experimental.agent_loop import AgentLoopManager
 from verl.experimental.reward_loop import RewardLoopManager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.ray import RayClassWithInitArgs, RayWorkerGroup, ResourcePoolManager
 from verl.trainer.ppo.utils import create_rl_sampler
 from verl.utils import omega_conf_to_dataclass
@@ -29,6 +29,7 @@ from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
 from verl.utils.device import get_device_name
 from verl.workers.engine_workers import ActorRolloutRefWorker
 from verl.workers.rollout.llm_server import LLMServerManager
+from tensordict import TensorDict
 
 
 def test_agent_reward_loop_standalone():
@@ -137,22 +138,15 @@ def test_agent_reward_loop_standalone():
 
     # 3. generate responses
     batch_dict = next(iter(dataloader))
-    batch = DataProto.from_single_dict(batch_dict)
+    batch = tu.batch_from_single_dict(batch_dict)
 
-    def _get_gen_batch(batch: DataProto) -> DataProto:
-        reward_keys = set({"data_source", "reward_model", "extra_info", "uid"}) & batch.non_tensor_batch.keys()
-
-        # pop those keys for generation
-        batch_keys_to_pop = []
-        non_tensor_batch_keys_to_pop = set(batch.non_tensor_batch.keys()) - reward_keys
-        gen_batch = batch.pop(
-            batch_keys=batch_keys_to_pop,
-            non_tensor_batch_keys=list(non_tensor_batch_keys_to_pop),
-        )
-
-        # For agent loop, we need reward model keys to compute score.
-        gen_batch.non_tensor_batch.update(batch.non_tensor_batch)
-
+    def _get_gen_batch(batch: TensorDict) -> TensorDict:
+        samples = tu.per_sample_arrays(batch)
+        reward_keys = {"data_source", "reward_model", "extra_info", "uid"} & set(samples)
+        drop_keys = set(samples) - reward_keys
+        gen_batch = tu.get_tensordict(samples)
+        for key in drop_keys:
+            batch.pop(key)
         return gen_batch
 
     # wake up rollout replicas via update_weight
@@ -161,11 +155,9 @@ def test_agent_reward_loop_standalone():
     gen_batch = agent_loop_manager.generate_sequences(gen_batch)
     checkpoint_manager.sleep_replicas()
 
-    batch = batch.union(gen_batch)
-    rm_outputs = reward_loop_manager.compute_rm_score(batch)
-
-    for output in rm_outputs[:5]:
-        print(output.non_tensor_batch)
+    batch = tu.union_tensor_dict(batch, gen_batch)
+    rm_output = reward_loop_manager.compute_rm_score(batch)
+    print(tu.per_sample_arrays(rm_output))
 
     print("done")
 

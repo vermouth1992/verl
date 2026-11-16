@@ -64,7 +64,7 @@ def test_basic_rollout_correction():
         rollout_rs=None,  # No rejection sampling (truncate mode)
     )
 
-    weights = weights_proto.batch["rollout_is_weights"]
+    weights = weights_proto["rollout_is_weights"]
     print(f"   Weights shape: {weights.shape}")
     print(f"   Mean weight: {metrics['rollout_corr/rollout_is_mean']:.4f}")
     print(f"   Max weight: {metrics['rollout_corr/rollout_is_max']:.4f}")
@@ -84,7 +84,7 @@ def test_basic_rollout_correction():
         rollout_rs=None,  # No rejection sampling (truncate mode)
     )
 
-    weights_seq = weights_seq_proto.batch["rollout_is_weights"]
+    weights_seq = weights_seq_proto["rollout_is_weights"]
     print(f"   Mean weight: {metrics_seq['rollout_corr/rollout_is_mean']:.4f}")
     print(f"   Effective sample size: {metrics_seq['rollout_corr/rollout_is_eff_sample_size']:.4f}")
     # Check that all tokens in a sequence have the same weight
@@ -376,7 +376,7 @@ def test_mask_mode():
         rollout_rs_threshold="0.5_2.0",
     )
 
-    weights = weights_proto.batch["rollout_is_weights"]
+    weights = weights_proto["rollout_is_weights"]
 
     # KEY FIX: Weights should be safety-bounded ratios (NOT zeroed)
     assert torch.all(weights[0, :] > 0), "Weights should remain as safety-bounded ratios (not zeroed)"
@@ -421,7 +421,7 @@ def test_exact_icepop_zeroes_weights_without_changing_mask():
         rollout_rs=None,
     )
 
-    weights = weights_proto.batch["rollout_is_weights"]
+    weights = weights_proto["rollout_is_weights"]
     expected_weights = torch.tensor([[0.0, 0.8, 0.0]], device=device)
 
     torch.testing.assert_close(weights, expected_weights, atol=1e-6, rtol=1e-6)

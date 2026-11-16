@@ -17,9 +17,10 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.experimental.reward_loop.reward_manager.dapo import DAPORewardManager as RewardLoopDAPORewardManager
 from verl.workers.reward_manager.dapo import DAPORewardManager
+from tensordict import TensorDict
 
 
 class _DummyTokenizer:
@@ -37,8 +38,8 @@ def _overlong_buffer_cfg(enable: bool, length: int = 128):
     return OmegaConf.create({"enable": enable, "len": length, "penalty_factor": 1.0, "log": False})
 
 
-def _make_data(batch_size: int = 2, seq_len: int = 4) -> DataProto:
-    return DataProto.from_dict(
+def _make_data(batch_size: int = 2, seq_len: int = 4) -> TensorDict:
+    return tu.batch_from_dict(
         tensors={
             "prompts": torch.ones(batch_size, seq_len, dtype=torch.long),
             "responses": torch.ones(batch_size, seq_len, dtype=torch.long),

@@ -18,8 +18,7 @@ import os
 
 from packaging.version import parse as parse_version
 
-# `verl.protocol` (imported just below) is the first module that pulls in Ray, so any
-# Ray flag read at import time must be set here first. When the training driver runs
+# Ray flag read at import time must be set here before any later Ray import. When the training driver runs
 # under `uv run`, Ray >=2.47 registers an automatic "uv" runtime-env hook that fires
 # during `ray.init()`. That hook rewrites `runtime_env["working_dir"]`, and because
 # verl deliberately passes an explicit `working_dir=None` (see
@@ -29,7 +28,6 @@ from packaging.version import parse as parse_version
 # redundant; disable it. `setdefault` keeps it overridable (set "1" to re-enable).
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-from .protocol import DataProto  # noqa: E402
 from .utils.device import is_npu_available  # noqa: E402
 from .utils.import_utils import import_external_libs  # noqa: E402
 from .utils.logging_utils import set_basic_config  # noqa: E402
@@ -43,7 +41,7 @@ with open(os.path.join(version_folder, "version/version")) as f:
 set_basic_config(level=logging.WARNING)
 
 
-__all__ = ["DataProto", "__version__"]
+__all__ = ["__version__"]
 
 
 modules = os.getenv("VERL_USE_EXTERNAL_MODULES", "")

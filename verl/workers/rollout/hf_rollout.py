@@ -27,7 +27,7 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.device import get_device_name, get_torch_device
 from verl.utils.torch_functional import get_response_mask
 
@@ -42,24 +42,23 @@ class HFRollout(BaseRollout):
         self.config = config
         self.module = module
 
-    def generate_sequences(self, prompts: DataProto) -> DataProto:
-        batch_size = prompts.batch.batch_size[0]
+    def generate_sequences(self, prompts: TensorDict) -> TensorDict:
+        batch_size = prompts.batch_size[0]
         num_chunks = max(batch_size // self.config.get("micro_batch_size", batch_size), 1)
-        batch_prompts = prompts.chunk(chunks=num_chunks)
+        batch_prompts = tu.chunk_tensordict(prompts, num_chunks)
         output = [self._generate_minibatch(p) for p in batch_prompts]
-        output = DataProto.concat(output)
-        return output
+        return tu.concat_tensordict(output)
 
     @torch.no_grad()
-    def _generate_minibatch(self, prompts: DataProto) -> DataProto:
+    def _generate_minibatch(self, prompts: TensorDict) -> TensorDict:
         # make sampling args can be overridden by inputs
-        do_sample = prompts.meta_info.get("do_sample", self.config.do_sample)
-        is_validate = prompts.meta_info.get("validate", False)
+        do_sample = tu.item(prompts, "do_sample", self.config.do_sample)
+        is_validate = tu.item(prompts, "validate", False)
 
-        temperature = prompts.meta_info.get("temperature", self.config.temperature)
-        response_length = prompts.meta_info.get("response_length", self.config.response_length)
-        top_p = prompts.meta_info.get("top_p", self.config.get("top_p", 1.0))
-        top_k = max(0, prompts.meta_info.get("top_k", self.config.get("top_k", 0)))  # to be compatible with vllm
+        temperature = tu.item(prompts, "temperature", self.config.temperature)
+        response_length = tu.item(prompts, "response_length", self.config.response_length)
+        top_p = tu.item(prompts, "top_p", self.config.get("top_p", 1.0))
+        top_k = max(0, tu.item(prompts, "top_k", self.config.get("top_k", 0)))  # to be compatible with vllm
 
         if not do_sample:
             # do_sample==False -> greedy decoding
@@ -93,14 +92,14 @@ class HFRollout(BaseRollout):
         # make config according to generate mode
         generation_config = GenerationConfig(**kwargs)
 
-        idx = prompts.batch["input_ids"]  # (bs, prompt_length)
+        idx = prompts["input_ids"]  # (bs, prompt_length)
         prompt_length = idx.size(1)
-        attention_mask = prompts.batch["attention_mask"]  # left-padded attention_mask
-        position_ids = prompts.batch["position_ids"]
+        attention_mask = prompts["attention_mask"]  # left-padded attention_mask
+        position_ids = prompts["position_ids"]
 
         # used to construct attention_mask
-        eos_token_id = prompts.meta_info["eos_token_id"]
-        pad_token_id = prompts.meta_info["pad_token_id"]
+        eos_token_id = tu.item(prompts, "eos_token_id")
+        pad_token_id = tu.item(prompts, "pad_token_id")
 
         self.module.eval()
         param_ctx = contextlib.nullcontext()
@@ -174,4 +173,4 @@ class HFRollout(BaseRollout):
         get_torch_device().empty_cache()
 
         self.module.train()
-        return DataProto(batch=batch)
+        return batch

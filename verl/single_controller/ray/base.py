@@ -24,13 +24,15 @@ import ray
 from ray.experimental.state.api import get_actor
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy, PlacementGroupSchedulingStrategy
+from tensordict import TensorDict
 
+from verl.batch_protocol import PADDING_SIZE_KEY
 from verl.plugin.platform import get_platform
-from verl.protocol import DataProto, _padding_size_key
 from verl.single_controller.base import ClassWithInitArgs, ResourcePool, Worker, WorkerGroup
 from verl.single_controller.base.decorator import MAGIC_ATTR, Dispatch
 from verl.utils.device import get_device_name
 from verl.utils.py_functional import temp_env_var
+from verl.utils.tensordict_utils import index_select_tensor_dict
 
 __all__ = ["Worker"]
 
@@ -53,15 +55,14 @@ def func_generator(self, method_name, dispatch_fn, collect_fn, execute_fn, block
     class Functor:
         def __call__(this, *args, **kwargs):
             args, kwargs = dispatch_fn(self, *args, **kwargs)
-            padding_count = kwargs.pop(_padding_size_key, 0)
+            padding_count = kwargs.pop(PADDING_SIZE_KEY, 0)
             output = execute_fn(method_name, *args, **kwargs)
             if blocking:
                 output = ray.get(output)
             output = collect_fn(self, output)
             if padding_count > 0:
-                if isinstance(output, DataProto):
-                    indices = [i for i in range(len(output))][:-padding_count]
-                    output = output.select_idxs(indices)
+                if isinstance(output, TensorDict):
+                    output = index_select_tensor_dict(output, list(range(len(output) - padding_count)))
                 elif isinstance(output, list):
                     output = output[:-padding_count]
             return output

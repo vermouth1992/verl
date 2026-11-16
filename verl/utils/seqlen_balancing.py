@@ -17,9 +17,9 @@ import heapq
 from itertools import chain
 
 import torch
+from tensordict import TensorDict
 from torch import distributed as dist
 
-from verl.protocol import DataProto
 from verl.utils import tensordict_utils as tu
 from verl.utils.device import get_device_name
 
@@ -523,27 +523,25 @@ def get_reverse_idx(idx_map):
 
 
 def prepare_dynamic_batch(
-    data: DataProto,
+    data: TensorDict,
     max_token_len: int,
     dp_group=None,
     num_batches_divided_by=None,
     same_micro_num_in_dp=True,
     min_num_micro_batch=None,
     use_dynamic_bsz_balance=True,
-) -> tuple[list[DataProto], list[list[int]]]:
-    """
-    Prepare a batch for dynamic batching.
+) -> tuple[list[TensorDict], list[list[int]]]:
+    """Split a TensorDict into token-balanced micro-batches.
 
     Args:
-        data (DataProto): The input data.
-        max_token_len (int): The maximum token length for dynamic batching.
+        data: Batch to split. Tensor and per-sample fields are indexed together.
+        max_token_len: Maximum token length for dynamic batching.
 
     Returns:
-        Tuple[List[DataProto], List[List[int]]]: A tuple containing a list of DataProto objects
-        and a list of index lists.
+        The micro-batches and the sample indices belonging to each one.
     """
-    batch, batch_idx_list = rearrange_micro_batches(
-        data.batch,
+    return rearrange_micro_batches(
+        data,
         max_token_len=max_token_len,
         dp_group=dp_group,
         num_batches_divided_by=num_batches_divided_by,
@@ -551,14 +549,6 @@ def prepare_dynamic_batch(
         min_num_micro_batch=min_num_micro_batch,
         use_dynamic_bsz_balance=use_dynamic_bsz_balance,
     )
-    micro_batches = []
-    for i, batch_idx in enumerate(batch_idx_list):
-        tensors = dict(batch[i])
-        non_tensors = {key: value[batch_idx] for key, value in data.non_tensor_batch.items()}
-        meta_info = copy.deepcopy(data.meta_info)
-        micro_batches.append(DataProto.from_dict(tensors, non_tensors, meta_info=meta_info))
-
-    return micro_batches, batch_idx_list
 
 
 def restore_dynamic_batch(data: torch.Tensor, batch_idx_list: list[list[int]]) -> torch.Tensor:

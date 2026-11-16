@@ -27,7 +27,7 @@ TransferQueue offers **fine-grained, sub-sample-level** data management and **lo
 
  - **September 8, 2026**: 🔥 TransferQueue has been adopted in [Meshy](https://github.com/OpenBMB/Meshy). Meshy models each role as a dedicated service, and TransferQueue serves as the data flow manager that connects each role.
  - **August 14, 2026**: 🔥 TransferQueue has been adopted in [Dressage](https://github.com/Accio-Lab/Dressage). By integrating TQ, peak memory usage of the data plane on the master node is reduced by 91% in a 32-node GLM-5.2 setup. Refer to the [report](https://github.com/Accio-Lab/Dressage/blob/main/docs/trajectory-storage-refactor-en.md) for details.
- - **June 18, 2026**: 🔥 TransferQueue has been adopted in [ROLL](https://github.com/alibaba/ROLL/pull/463). This integration introduces a [`RemoteBatch`](https://github.com/alibaba/ROLL/blob/main/docs_roll/docs/User%20Guides/Advanced%20Features/remote_batch_transfer.md) abstraction, enabling seamless compatibility with existing `DataProto` design.
+ - **June 18, 2026**: 🔥 TransferQueue has been adopted in [ROLL](https://github.com/alibaba/ROLL/pull/463). This integration introduces a [`RemoteBatch`](https://github.com/alibaba/ROLL/blob/main/docs_roll/docs/User%20Guides/Advanced%20Features/remote_batch_transfer.md) abstraction, enabling seamless compatibility with existing `TensorDict` design.
  - **June 9, 2026**: 🔥 TransferQueue has been adopted in [UniRL](https://github.com/Tencent-Hunyuan/UniRL), a unified RL framework for multimodal models developed by Tencent Hunyuan.
  - **April 15, 2026**: 🔥 TransferQueue has been adopted in [Relax](https://github.com/redai-infra/Relax)! By leveraging the `StreamingDataLoader` abstraction, it schedules training data across the cluster at micro-batch granularity, reducing synchronization barriers in a single-controller setup.
  - **April 10, 2026**: 🔥 TransferQueue is now officially integrated into [verl](https://github.com/verl-project/verl/pull/5401)! <span style="color: #FF0000;">**We achieved an end-to-end performance gain of 49.1% for multi-modal post-training on a 128 × H100 GPU cluster!**</span> Refer to [our blog](https://www.yuque.com/haomingzi-lfse7/lhp4el/gm8mkpfu83luuhxg?singleDoc#) for more details.
@@ -147,7 +147,7 @@ Developers can leverage `TransferQueueClient` directly to implement advanced fea
 ### Collocated Example
 
 #### verl
-V1 uses TransferQueue to exchange training data without routing every `DataProto` through the controller. The legacy `RayPPOTrainer`, available in [verl v0.9.1](https://github.com/verl-project/verl/tree/v0.9.1), routed all batches through a single controller.
+V1 uses TransferQueue to exchange training data without routing every `TensorDict` through the controller. The legacy `RayPPOTrainer`, available in [verl v0.9.1](https://github.com/verl-project/verl/tree/v0.9.1), routed all batches through a single controller.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/wuxibin89/verl/refs/heads/wuxibin/doc_images/docs/_static/transfer_queue.png" width="100%">

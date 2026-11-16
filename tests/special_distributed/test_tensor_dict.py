@@ -20,7 +20,8 @@ import numpy as np
 import torch
 import torch.distributed
 
-from verl.protocol import DataProto, all_gather_data_proto
+from verl.utils import tensordict_utils as tu
+from verl.utils.tensordict_utils import all_gather_tensordict
 from verl.utils.device import get_device_name, is_npu_available
 from verl.utils.distributed import initialize_global_process_group
 
@@ -29,7 +30,7 @@ if is_npu_available:
     import megatron_adaptor  # noqa: F401
 
 
-def test_all_gather_data_proto():
+def test_all_gather_tensordict():
     device_mesh = torch.distributed.device_mesh.init_device_mesh(
         get_device_name(), mesh_shape=[2, 2], mesh_dim_names=["dp", "tp"]
     )
@@ -40,9 +41,9 @@ def test_all_gather_data_proto():
 
     labels = ["a", "b"] if global_rank % 2 == 0 else ["b", "a"]
     labels = np.array(labels, dtype=object)
-    data = DataProto.from_dict(tensors={"obs": obs}, non_tensors={"labels": labels}, meta_info={"info": "test_info"})
+    data = tu.batch_from_dict(tensors={"obs": obs}, non_tensors={"labels": labels}, meta_info={"info": "test_info"})
 
-    all_gather_data_proto(data=data, process_group=device_mesh.get_group("dp"))
+    data = all_gather_tensordict(data, process_group=device_mesh.get_group("dp"))
 
     if global_rank == 0:
         expected_obs = torch.tensor([[0, 1], [0, 1], [2, 5], [6, 9]], device=get_device_name())
@@ -57,9 +58,9 @@ def test_all_gather_data_proto():
         expected_obs = torch.tensor([[1, 3], [3, 5], [3, 7], [9, 13]], device=get_device_name())
         expected_labels = ["b", "a", "b", "a"]
 
-    torch.testing.assert_close(data.batch["obs"], expected_obs, atol=0, rtol=0)
-    assert (data.non_tensor_batch["labels"] == expected_labels).all()
-    assert data.meta_info == {"info": "test_info"}
+    torch.testing.assert_close(data["obs"], expected_obs, atol=0, rtol=0)
+    assert tu.item(data, "labels") == expected_labels
+    assert tu.metadata(data) == {"info": "test_info"}
 
 
 def test_vocab_parallel_entropy():
@@ -180,6 +181,6 @@ def test_vocab_parallel_sum_pi_squared():
 
 if __name__ == "__main__":
     local_rank, rank, world_size = initialize_global_process_group()
-    test_all_gather_data_proto()
+    test_all_gather_tensordict()
     test_vocab_parallel_entropy()
     test_vocab_parallel_sum_pi_squared()

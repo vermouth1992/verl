@@ -14,9 +14,11 @@
 
 import inspect
 
-from verl import DataProto
+from tensordict import TensorDict
+
 from verl.experimental.reward_loop.reward_manager import register
 from verl.experimental.reward_loop.reward_manager.base import RewardManagerBase
+from verl.utils import tensordict_utils as tu
 from verl.utils.reward_score import default_compute_score
 
 
@@ -32,17 +34,17 @@ class GDPORewardManager(RewardManagerBase):
         self.reward_router_address = reward_router_address
         self.reward_model_tokenizer = reward_model_tokenizer
 
-    async def run_single(self, data: DataProto) -> dict:
+    async def run_single(self, data: TensorDict) -> dict:
         data = data[-1:]  # for multi-sequence outputs, we only compute reward based on the last sequence
         data_item = data[0]
-        response_ids = data_item.batch["responses"]
+        response_ids = data_item["responses"]
         response_length = response_ids.shape[-1]
-        valid_response_length = data_item.batch["attention_mask"][-response_length:].sum()
+        valid_response_length = data_item["attention_mask"][-response_length:].sum()
         valid_response_ids = response_ids[:valid_response_length]
 
-        data_source = data_item.non_tensor_batch["data_source"]
-        ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
-        extra_info = data_item.non_tensor_batch.get("extra_info", {})
+        data_source = tu.item(data_item, "data_source")
+        ground_truth = tu.item(data_item, "reward_model")["ground_truth"]
+        extra_info = tu.item(data_item, "extra_info", {})
         extra_info["experiment_name"] = self.config.trainer.experiment_name
 
         response_str = await self.loop.run_in_executor(

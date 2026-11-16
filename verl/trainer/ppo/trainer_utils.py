@@ -17,23 +17,25 @@
 
 from typing import Optional
 
+import numpy as np
 import torch
+from tensordict import TensorDict
 
-from verl import DataProto
 from verl.trainer.config import AlgoConfig
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator
+from verl.utils import tensordict_utils as tu
 from verl.utils.torch_functional import masked_mean
 
 
-def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, kl_penalty="kl"):
+def apply_kl_penalty(data: TensorDict, kl_ctrl: core_algos.AdaptiveKLController, kl_penalty="kl"):
     """Apply KL penalty to the token-level rewards.
 
     This function computes the KL divergence between the reference policy and current policy,
     then applies a penalty to the token-level rewards based on this divergence.
 
     Args:
-        data (DataProto): The data containing batched model outputs and inputs.
+        data (TensorDict): The data containing batched model outputs and inputs.
         kl_ctrl (core_algos.AdaptiveKLController): Controller for adaptive KL penalty.
         kl_penalty (str, optional): Type of KL penalty to apply. Defaults to "kl".
 
@@ -42,14 +44,14 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
             - The updated data with token-level rewards adjusted by KL penalty
             - A dictionary of metrics related to the KL penalty
     """
-    response_mask = data.batch["response_mask"]
-    token_level_scores = data.batch["token_level_scores"]
-    batch_size = data.batch.batch_size[0]
+    response_mask = data["response_mask"]
+    token_level_scores = data["token_level_scores"]
+    batch_size = data.batch_size[0]
 
     # compute kl between ref_policy and current policy
     # When apply_kl_penalty, algorithm.use_kl_in_reward=True, so the reference model has been enabled.
     kld = core_algos.kl_penalty(
-        data.batch["old_log_probs"], data.batch["ref_log_prob"], kl_penalty=kl_penalty
+        data["old_log_probs"], data["ref_log_prob"], kl_penalty=kl_penalty
     )  # (batch_size, response_length)
     kld = kld * response_mask
     beta = kl_ctrl.value
@@ -61,28 +63,28 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
 
     # according to https://github.com/huggingface/trl/blob/951ca1841f29114b969b57b26c7d3e80a39f75a0/trl/trainer/ppo_trainer.py#L837
     kl_ctrl.update(current_kl=current_kl, n_steps=batch_size)
-    data.batch["token_level_rewards"] = token_level_rewards
+    data["token_level_rewards"] = token_level_rewards
 
     metrics = {"actor/reward_kl_penalty": current_kl, "actor/reward_kl_penalty_coeff": beta}
 
     return data, metrics
 
 
-def compute_response_mask(data: DataProto):
+def compute_response_mask(data: TensorDict):
     """Compute the attention mask for the response part of the sequence.
 
     This function extracts the portion of the attention mask that corresponds to the model's response,
     which is used for masking computations that should only apply to response tokens.
 
     Args:
-        data (DataProto): The data containing batched model outputs and inputs.
+        data (TensorDict): The data containing batched model outputs and inputs.
 
     Returns:
         torch.Tensor: The attention mask for the response tokens.
     """
-    responses = data.batch["responses"]
+    responses = data["responses"]
     response_length = responses.size(1)
-    attention_mask = data.batch["attention_mask"]
+    attention_mask = data["attention_mask"]
     return attention_mask[:, -response_length:]
 
 
@@ -136,21 +138,21 @@ def compute_spec_decode_metrics(
 
 
 def compute_advantage(
-    data: DataProto,
+    data: TensorDict,
     adv_estimator: AdvantageEstimator,
     gamma: float = 1.0,
     lam: float = 1.0,
     num_repeat: int = 1,
     norm_adv_by_std_in_grpo: bool = True,
     config: Optional[AlgoConfig] = None,
-) -> DataProto:
+) -> TensorDict:
     """Compute advantage estimates for policy optimization.
 
     This function computes advantage estimates using various estimators like GAE, GRPO, REINFORCE++, etc.
     The advantage estimates are used to guide policy optimization in RL algorithms.
 
     Args:
-        data (DataProto): The data containing batched model outputs and inputs.
+        data (TensorDict): The data containing batched model outputs and inputs.
         adv_estimator (AdvantageEstimator): The advantage estimator to use (e.g., GAE, GRPO, REINFORCE++).
         gamma (float, optional): Discount factor for future rewards. Defaults to 1.0.
         lam (float, optional): Lambda parameter for GAE. Defaults to 1.0.
@@ -160,23 +162,23 @@ def compute_advantage(
         config (dict, optional): Configuration dictionary for algorithm settings. Defaults to None.
 
     Returns:
-        DataProto: The updated data with computed advantages and returns.
+        TensorDict: The updated data with computed advantages and returns.
     """
     # Back-compatible with trainers that do not compute response mask in fit
-    if "response_mask" not in data.batch.keys():
-        data.batch["response_mask"] = compute_response_mask(data)
+    if "response_mask" not in data.keys():
+        data["response_mask"] = compute_response_mask(data)
     # prepare response group
     if adv_estimator == AdvantageEstimator.GAE:
         # Compute advantages and returns using Generalized Advantage Estimation (GAE)
         advantages, returns = core_algos.compute_gae_advantage_return(
-            token_level_rewards=data.batch["token_level_rewards"],
-            values=data.batch["values"],
-            response_mask=data.batch["response_mask"],
+            token_level_rewards=data["token_level_rewards"],
+            values=data["values"],
+            response_mask=data["response_mask"],
             gamma=gamma,
             lam=lam,
         )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
+        data["advantages"] = advantages
+        data["returns"] = returns
         if config.get("use_pf_ppo", False):
             data = core_algos.compute_pf_ppo_reweight_data(
                 data,
@@ -185,49 +187,49 @@ def compute_advantage(
             )
     elif adv_estimator == AdvantageEstimator.GRPO:
         # Initialize the mask for GRPO calculation
-        grpo_calculation_mask = data.batch["response_mask"]
+        grpo_calculation_mask = data["response_mask"]
 
         # Call compute_grpo_outcome_advantage with parameters matching its definition
         advantages, returns = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
+            token_level_rewards=data["token_level_rewards"],
             response_mask=grpo_calculation_mask,
-            index=data.non_tensor_batch["uid"],
+            index=np.asarray(tu.item(data, "uid"), dtype=object),
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
+        data["advantages"] = advantages
+        data["returns"] = returns
     else:
         # handle all other adv estimator type other than GAE and GRPO
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
         adv_kwargs = {
-            "token_level_rewards": data.batch["token_level_rewards"],
-            "response_mask": data.batch["response_mask"],
+            "token_level_rewards": data["token_level_rewards"],
+            "response_mask": data["response_mask"],
             "config": config,
         }
-        if "uid" in data.non_tensor_batch:  # optional
-            adv_kwargs["index"] = data.non_tensor_batch["uid"]
-        if "reward_baselines" in data.batch:  # optional
-            adv_kwargs["reward_baselines"] = data.batch["reward_baselines"]
+        if "uid" in data.keys():
+            adv_kwargs["index"] = np.asarray(tu.item(data, "uid"), dtype=object)
+        if "reward_baselines" in data.keys():
+            adv_kwargs["reward_baselines"] = data["reward_baselines"]
         # GDPO: pass raw data for per-dimension reward extraction
         if adv_estimator in (AdvantageEstimator.GDPO, "gdpo"):
-            adv_kwargs["non_tensor_batch"] = data.non_tensor_batch
-            adv_kwargs["batch"] = data.batch
+            adv_kwargs["non_tensor_batch"] = tu.per_sample_arrays(data)
+            adv_kwargs["batch"] = data
         # Add sum_pi_squared for Optimal Token Baseline
         if adv_estimator in (AdvantageEstimator.OPTIMAL_TOKEN_BASELINE, AdvantageEstimator.TIR_OPTIMAL_TOKEN_BASELINE):
             # Check if sum_pi_squared is available
-            assert "sum_pi_squared" in data.batch, (
+            assert "sum_pi_squared" in data.keys(), (
                 "Step-dependent optimal baseline requires sum_pi_squared from actor. "
                 "Please set actor.calculate_sum_pi_squared=True in config."
             )
-            adv_kwargs["sum_pi_squared"] = data.batch["sum_pi_squared"]
+            adv_kwargs["sum_pi_squared"] = data["sum_pi_squared"]
             # old_log_probs needed for path-variance proxy: w_t = 1 - 2*exp(old_log_probs) + sum_pi_squared
-            adv_kwargs["old_log_probs"] = data.batch["old_log_probs"]
+            adv_kwargs["old_log_probs"] = data["old_log_probs"]
             # Get pre-computed rollout IS weights if available
-            rollout_is_weights = data.batch.get("rollout_is_weights", None)
+            rollout_is_weights = data.get("rollout_is_weights", None)
             adv_kwargs["rollout_is_weights"] = rollout_is_weights
 
         # calculate advantage estimator
         advantages, returns = adv_estimator_fn(**adv_kwargs)
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
+        data["advantages"] = advantages
+        data["returns"] = returns
     return data

@@ -26,7 +26,7 @@ from torch.distributed import ProcessGroup
 from torch.distributed.device_mesh import DeviceMesh
 
 if TYPE_CHECKING:
-    from verl import DataProto
+    from tensordict import TensorDict
 
 _ULYSSES_SEQUENCE_PARALLEL_GROUP = None
 
@@ -354,10 +354,10 @@ class BaseShardingManager:
     def __exit__(self, exc_type, exc_value, traceback):
         pass
 
-    def preprocess_data(self, data: "DataProto") -> "DataProto":
+    def preprocess_data(self, data: "TensorDict") -> "TensorDict":
         return data
 
-    def postprocess_data(self, data: "DataProto") -> "DataProto":
+    def postprocess_data(self, data: "TensorDict") -> "TensorDict":
         return data
 
 
@@ -380,7 +380,7 @@ class FSDPUlyssesShardingManager(BaseShardingManager):
         if self.device_mesh is not None:
             set_ulysses_sequence_parallel_group(self.prev_sp_group)
 
-    def preprocess_data(self, data: "DataProto") -> "DataProto":
+    def preprocess_data(self, data: "TensorDict") -> "TensorDict":
         """
         AllGather data from sp region.
 
@@ -388,18 +388,20 @@ class FSDPUlyssesShardingManager(BaseShardingManager):
         In Ulysses, we need to make sure the same data is used across a SP group.
         """
         if self.device_mesh is not None:
-            from verl.protocol import all_gather_data_proto
+            from verl.utils.tensordict_utils import all_gather_tensordict
 
             group = self.device_mesh["sp"].get_group()
-            all_gather_data_proto(data=data, process_group=group)
+            data = all_gather_tensordict(data, process_group=group)
         return data
 
-    def postprocess_data(self, data: "DataProto") -> "DataProto":
+    def postprocess_data(self, data: "TensorDict") -> "TensorDict":
         """
         Split the data to follow FSDP partition.
         """
         if self.device_mesh is not None:
             sp_size = self.device_mesh["sp"].size()
             sp_rank = self.device_mesh["sp"].get_local_rank()
-            data = data.chunk(chunks=sp_size)[sp_rank]
+            from verl.utils.tensordict_utils import chunk_tensordict
+
+            data = chunk_tensordict(data, sp_size)[sp_rank]
         return data

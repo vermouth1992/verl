@@ -23,7 +23,7 @@ from PIL import Image
 from transformers.utils import get_json_schema
 
 from tests.experimental.agent_loop.agent_utils import init_agent_loop_manager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.tools.base_tool import BaseTool, OpenAIFunctionToolSchema
 from verl.tools.schemas import ToolResponse
 from verl.utils import hf_tokenizer
@@ -228,21 +228,19 @@ def test_multimodal_tool_agent(init_config):
             ]
         )
 
-    batch = DataProto(
-        non_tensor_batch={
+    batch = tu.get_tensordict({**({}), **({
             "raw_prompt": np.array([np.array(prompt) for prompt in raw_prompts], dtype=object),
             "agent_name": np.array(["tool_agent"] * len(raw_prompts)),
             "data_source": np.array(["openai/gsm8k"] * len(raw_prompts)),
             "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts)),
-        },
-    )
-    batch = batch.repeat(n)
+        })}, None)
+    batch = batch.repeat_interleave(n)
     result = agent_loop_manager.generate_sequences(prompts=batch)
     assert len(result) == len(raw_prompts) * n
 
     # Check turns
-    num_turns = result.non_tensor_batch["__num_turns__"]
-    multi_modal_inputs = result.non_tensor_batch["multi_modal_inputs"]
+    num_turns = tu.item(result, "__num_turns__")
+    multi_modal_inputs = tu.item(result, "multi_modal_inputs")
     print(f"num_turns: {num_turns}")
     for i in range(len(num_turns)):
         multi_modal_type = parse_multi_modal_type(raw_prompts[i // n])
@@ -266,9 +264,9 @@ def test_multimodal_tool_agent(init_config):
 
     # Check that images were properly returned in the tool responses
     tokenizer = hf_tokenizer(init_config.actor_rollout_ref.model.path)
-    responses = result.batch["responses"]
-    response_mask = result.batch["response_mask"]
-    attention_mask = result.batch["attention_mask"]
+    responses = result["responses"]
+    response_mask = result["response_mask"]
+    attention_mask = result["attention_mask"]
     assert responses.size() == response_mask.size(), f"{responses.size()} != {response_mask.size()}"
     response_length = response_mask.size(1)
 
@@ -396,33 +394,31 @@ def test_multimodal_single_turn_agent(init_config):
             ]
         )
 
-    batch = DataProto(
-        non_tensor_batch={
+    batch = tu.get_tensordict({**({}), **({
             "raw_prompt": np.array([np.array(prompt) for prompt in raw_prompts], dtype=object),
             "agent_name": np.array(["single_turn_agent"] * len(raw_prompts)),
             "data_source": np.array(["openai/gsm8k"] * len(raw_prompts)),
             "reward_model": np.array([{"style": "rule", "ground_truth": "1.0"}] * len(raw_prompts)),
-        },
-    )
+        })}, None)
 
-    batch = batch.repeat(n)
+    batch = batch.repeat_interleave(n)
     result = agent_loop_manager.generate_sequences(prompts=batch)
     assert len(result) == len(raw_prompts) * n
 
     # Check turns - all should be single turn (2: user + assistant)
-    num_turns = result.non_tensor_batch["__num_turns__"]
+    num_turns = tu.item(result, "__num_turns__")
     print(f"num_turns: {num_turns}")
     for i in range(len(num_turns)):
         assert num_turns[i] == 2, f"Expected 2 turns but got {num_turns[i]} for sample {i}"
 
     # Verify responses
     tokenizer = hf_tokenizer(init_config.actor_rollout_ref.model.path)
-    prompts = result.batch["prompts"]
-    responses = result.batch["responses"]
-    response_mask = result.batch["response_mask"]
-    input_ids = result.batch["input_ids"]
-    position_ids = result.batch["position_ids"]
-    multi_modal_inputs = result.non_tensor_batch["multi_modal_inputs"]
+    prompts = result["prompts"]
+    responses = result["responses"]
+    response_mask = result["response_mask"]
+    input_ids = result["input_ids"]
+    position_ids = result["position_ids"]
+    multi_modal_inputs = tu.item(result, "multi_modal_inputs")
     assert responses.size() == response_mask.size(), f"{responses.size()} != {response_mask.size()}"
     assert position_ids.size() == (input_ids.size(0), 4, input_ids.size(1))  # (batch_size, 4, seq_len)
 

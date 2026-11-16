@@ -22,7 +22,7 @@ from codetiming import Timer
 from packaging import version
 from torch import distributed as dist
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
@@ -38,7 +38,7 @@ class DummyWorker(Worker):
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE, blocking=False)
     def do_nothing(self, data):
-        for key in data.batch.keys():
+        for key in data.keys():
             data.batch[key] += 1
         if version.parse(tensordict.__version__) >= version.parse("0.5.0"):
             data.batch = data.batch.consolidate()
@@ -63,7 +63,7 @@ def test_data_transfer():
     for i in range(2):
         data_dict[str(i)] = torch.randint(0, 10000, (batch_size, seqlen))
 
-    data = DataProto.from_dict(tensors=data_dict)
+    data = tu.batch_from_dict(tensors=data_dict)
 
     print(data)
 
@@ -100,7 +100,7 @@ def test_data_transfer():
         output_lst = ray.get(output_ref)
 
     for input_data, output_data in zip(data_list, output_lst, strict=True):
-        for key in input_data.batch.keys():
+        for key in input_data.keys():
             assert torch.all(torch.eq(input_data.batch[key] + 1, output_data.batch[key])), (
                 input_data.batch[key],
                 output_data.batch[key],

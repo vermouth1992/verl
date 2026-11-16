@@ -14,14 +14,15 @@
 import numpy as np
 import pytest
 import torch
+from tensordict import TensorDict
 
-from verl.protocol import DataProto
 from verl.trainer.ppo.core_algos import AdvantageEstimator
 from verl.trainer.ppo.v1.utils import compute_advantage, compute_advantage_for_multi_trajectories
+from verl.utils import tensordict_utils as tu
 
 
 @pytest.fixture
-def batch_data() -> DataProto:
+def batch_data() -> TensorDict:
     tensors = {
         "token_level_rewards": torch.tensor(
             [
@@ -49,10 +50,10 @@ def batch_data() -> DataProto:
     non_tensors = {
         "uid": np.array(["prompt_a"] * 6, dtype=object),
     }
-    return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors)
+    return tu.batch_from_dict(tensors=tensors, non_tensors=non_tensors)
 
 
-def test_compute_advantage_for_single_trajectory(batch_data: DataProto):
+def test_compute_advantage_for_single_trajectory(batch_data: TensorDict):
     result = compute_advantage_for_multi_trajectories(
         data=batch_data,
         batch_keys=[f"prompt_a_{i}_0" for i in range(len(batch_data))],
@@ -62,25 +63,25 @@ def test_compute_advantage_for_single_trajectory(batch_data: DataProto):
         batch_data,
         adv_estimator=AdvantageEstimator.GRPO,
     )
-    assert torch.equal(result.batch["advantages"], expected.batch["advantages"])
-    assert torch.equal(result.batch["returns"], expected.batch["returns"])
+    assert torch.equal(result["advantages"], expected["advantages"])
+    assert torch.equal(result["returns"], expected["returns"])
 
 
-def test_compute_advantage_for_multi_trajectories(batch_data: DataProto):
+def test_compute_advantage_for_multi_trajectories(batch_data: TensorDict):
     result = compute_advantage_for_multi_trajectories(
         data=batch_data,
         batch_keys=["prompt_a_0_0", "prompt_a_0_1", "prompt_a_2_0", "prompt_a_2_1", "prompt_a_3_0", "prompt_a_4_0"],
         adv_estimator=AdvantageEstimator.GRPO,
     )
     expected = compute_advantage(
-        batch_data.select_idxs([1, 3, 4, 5]),
+        tu.index_select_tensor_dict(batch_data, [1, 3, 4, 5]),
         adv_estimator=AdvantageEstimator.GRPO,
     )
     gather_row_indices = [0, 0, 1, 1, 2, 3]
     gather_col_indices = [0, 0, 1, 1, 0, 0]
     adv_expected = (
-        expected.batch["advantages"][gather_row_indices, gather_col_indices].unsqueeze(-1)
-        * result.batch["response_mask"]
+        expected["advantages"][gather_row_indices, gather_col_indices].unsqueeze(-1)
+        * result["response_mask"]
     )
-    assert torch.equal(result.batch["advantages"], adv_expected)
-    assert torch.equal(result.batch["returns"], adv_expected)
+    assert torch.equal(result["advantages"], adv_expected)
+    assert torch.equal(result["returns"], adv_expected)

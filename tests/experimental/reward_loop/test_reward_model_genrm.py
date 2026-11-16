@@ -19,13 +19,14 @@ import torch
 from hydra import compose, initialize_config_dir
 
 from verl.experimental.reward_loop import RewardLoopManager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils import hf_tokenizer
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.tokenizer import normalize_token_ids
+from tensordict import TensorDict
 
 
-def create_data_samples(tokenizer, min_samples) -> DataProto:
+def create_data_samples(tokenizer, min_samples) -> TensorDict:
     convs = [
         [
             {
@@ -89,7 +90,7 @@ def create_data_samples(tokenizer, min_samples) -> DataProto:
     attention_masks = torch.stack(attention_masks)
     position_ids = compute_position_id_with_mask(attention_masks)
 
-    data = DataProto.from_dict(
+    data = tu.batch_from_dict(
         tensors={
             "prompts": prompts,
             "responses": responses,
@@ -157,7 +158,7 @@ def test_reward_model_manager():
     for idx, (conv, output) in enumerate(zip(convs, outputs, strict=True)):
         print(f"Problem {idx}:\n{conv[0]['content']}\n")
         print(f"AI Solution {idx}:\n{conv[1]['content']}\n")
-        print(f"GRM Response {idx}:\n{output.non_tensor_batch['genrm_response']}\n")
+        print(f"GRM Response {idx}:\n{tu.item(output, 'genrm_response')}\n")
         print("=" * 50 + "\n")
 
     ray.shutdown()

@@ -33,7 +33,7 @@ import ray
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen3MoeConfig
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
 from verl.utils import tensordict_utils as tu
 from verl.utils.model import compute_position_id_with_mask, create_random_mask
@@ -85,7 +85,7 @@ def _build_data(vocab_size):
     position_ids = compute_position_id_with_mask(attention_mask)
     responses = input_ids[:, response_length:]
     response_mask = attention_mask[:, response_length:]
-    data = DataProto.from_single_dict(
+    data = tu.batch_from_single_dict(
         {
             "input_ids": input_ids,
             "prompts": input_ids[:, :response_length],

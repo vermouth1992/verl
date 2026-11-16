@@ -392,8 +392,7 @@ class RLHFDataset(Dataset):
         row_dict.pop(self.video_key, None)
         row_dict.pop(self.audio_key, None)
 
-        # TODO(wuxibin): We still need a dummy tensor to make sure DataProto.batch is not empty.
-        # Remove this after deprecate DataProto by TensorDict.
+        # A dummy tensor keeps the batch dimension present for downstream TensorDict consumers.
         row_dict["dummy_tensor"] = torch.tensor([0], dtype=torch.uint8)
 
         # add index for each prompt

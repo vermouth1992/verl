@@ -166,14 +166,14 @@ In verl, we design a syntax sugar to encapsulate the 3 processes into a single c
 
 .. code-block:: python
 
-   @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+   @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
    def generate_sequences(data):
        ...
 
    # on the driver
    output = actor_rollout_ref_wg.generate_sequences(data)
 
-We decorate the method of the worker with a ``register`` that explicitly defines how the input data should be split and dispatched to each worker, and how the output data should be collected and concatenated by the controller. For example, ``Dispatch.DP_COMPUTE_PROTO`` splits the input data into dp chunks, dispatch each data to each worker, collect the output and concatenate the results. Note that this function requires the input and output to be a DataProto defined here (https://github.com/verl-project/verl/blob/main/verl/protocol.py).
+We decorate the method of the worker with a ``register`` that explicitly defines how the input data should be split and dispatched to each worker, and how the output data should be collected and concatenated by the controller. For example, ``Dispatch.DP_COMPUTE_BATCH`` splits the input data into dp chunks, dispatch each data to each worker, collect the output and concatenate the results. Note that this function requires the input and output to be a TensorDict defined here (https://github.com/verl-project/verl/blob/main/verl/batch_batch_protocol.py).
 
 
 PPO main loop
@@ -221,7 +221,7 @@ Important code files in the repository are organized as below:
        generation.yaml  # configuration template for rollout
        ppo_trainer.yaml  # configuration template for the RL trainer
      workers
-       protocol.py  # the interface of DataProto
+       batch_protocol.py  # the interface of TensorDict
        engine_workers.py  # unified ActorRolloutRefWorker / TrainingWorker implementations
        engine
          fsdp                  # FSDP / FSDP2 actor+critic engine implementations

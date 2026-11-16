@@ -23,15 +23,28 @@ from typing import Any, Callable
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from tensordict import TensorDict
 from transformers import AutoConfig
 
 import verl.utils.torch_functional as verl_F
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.fs import copy_to_local
 from verl.utils.import_utils import deprecated
 from verl.utils.model import update_model_config
 
 logger = logging.getLogger(__name__)
+
+
+def _optional_numeric(batch: TensorDict, key: str) -> torch.Tensor | None:
+    """Return a per-sample numeric field as a tensor, or None when it is absent."""
+    if key not in batch.keys():
+        return None
+    value = tu.item(batch, key)
+    if isinstance(value, torch.Tensor):
+        return value
+    if isinstance(value, list | np.ndarray):
+        return torch.as_tensor(value)
+    return None
 
 _NUM_LOCAL_EXPERTS_MODEL_TYPES = {"gpt_oss", "mixtral"}
 
@@ -57,14 +70,14 @@ def reduce_metrics(metrics: dict[str, list[Any]]) -> dict[str, Any]:
     return reduce_metrics(metrics)
 
 
-def _compute_response_info(batch: DataProto) -> dict[str, Any]:
+def _compute_response_info(batch: TensorDict) -> dict[str, Any]:
     """
     Computes information about prompts and responses from a batch.
 
     This is an internal helper function that extracts masks and lengths for prompts and responses.
 
     Args:
-        batch: A DataProto object containing batch data with responses and attention masks.
+        batch: A TensorDict object containing batch data with responses and attention masks.
 
     Returns:
         A dictionary containing:
@@ -72,16 +85,16 @@ def _compute_response_info(batch: DataProto) -> dict[str, Any]:
             - prompt_length: Tensor of prompt lengths for each item in the batch
             - response_length: Tensor of response lengths for each item in the batch
     """
-    if "prompt_length" in batch.batch and "response_length" in batch.batch:
+    if "prompt_length" in batch.keys() and "response_length" in batch.keys():
         return dict(
-            prompt_length=batch.batch["prompt_length"],
-            response_length=batch.batch["response_length"],
+            prompt_length=batch["prompt_length"],
+            response_length=batch["response_length"],
         )
 
-    response_length = batch.batch["responses"].shape[-1]
+    response_length = batch["responses"].shape[-1]
 
-    prompt_mask = batch.batch["attention_mask"][:, :-response_length]
-    response_mask = batch.batch["attention_mask"][:, -response_length:]
+    prompt_mask = batch["attention_mask"][:, :-response_length]
+    response_mask = batch["attention_mask"][:, -response_length:]
 
     prompt_length = prompt_mask.sum(-1).float()
     response_length = response_mask.sum(-1).float()  # (batch_size,)
@@ -311,7 +324,7 @@ def get_metric_data_with_optional_routed_experts(
 
 
 def compute_moe_lb_metrics(
-    metrics_batch: DataProto,
+    metrics_batch: TensorDict,
     moe_lb_metrics_interval: int,
     global_steps: int,
     accumulator: "RolloutMoELoadBalanceMetricsAccumulator",
@@ -321,8 +334,8 @@ def compute_moe_lb_metrics(
         return {}
 
     updated_moe_lb_metrics = accumulator.update(
-        routed_experts=metrics_batch.batch.get("routed_experts", None),
-        response_mask=metrics_batch.batch.get("response_mask", None),
+        routed_experts=metrics_batch.get("routed_experts", None),
+        response_mask=metrics_batch.get("response_mask", None),
     )
     if global_steps % moe_lb_metrics_interval != 0:
         return {}
@@ -428,7 +441,7 @@ class RolloutMoELoadBalanceMetricsAccumulator:
         return metrics
 
 
-def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str, Any]:
+def compute_data_metrics(batch: TensorDict, use_critic: bool = True) -> dict[str, Any]:
     """
     Computes various metrics from a batch of data for PPO training.
 
@@ -437,7 +450,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     for each metric category.
 
     Args:
-        batch: A DataProto object containing batch data with token-level scores, rewards, advantages, etc.
+        batch: A TensorDict object containing batch data with token-level scores, rewards, advantages, etc.
         use_critic: Whether to include critic-specific metrics. Defaults to True.
 
     Returns:
@@ -452,16 +465,16 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             - prompt_length/mean, max, min, clip_ratio: Statistics about prompt lengths
             - num_turns/mean, max, min: Statistics about the number of multi-turn conversations
     """
-    sequence_score = batch.batch["token_level_scores"].sum(-1)
-    sequence_reward = batch.batch["token_level_rewards"].sum(-1)
+    sequence_score = batch["token_level_scores"].sum(-1)
+    sequence_reward = batch["token_level_rewards"].sum(-1)
 
-    advantages = batch.batch["advantages"]
-    returns = batch.batch["returns"]
+    advantages = batch["advantages"]
+    returns = batch["returns"]
 
-    max_prompt_length = batch.batch["prompts"].shape[-1]
-    max_response_length = batch.batch["responses"].shape[-1]
+    max_prompt_length = batch["prompts"].shape[-1]
+    max_response_length = batch["responses"].shape[-1]
 
-    response_mask = batch.batch["response_mask"].bool()
+    response_mask = batch["response_mask"].bool()
 
     response_info = _compute_response_info(batch)
     prompt_length = response_info["prompt_length"]
@@ -528,7 +541,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         non_aborted_response_length_clip_ratio = float("nan")
 
     if use_critic:
-        values = batch.batch["values"]
+        values = batch["values"]
         valid_values = torch.masked_select(values, response_mask)
         if valid_returns.numel() > 0 and valid_values.numel() > 0:
             return_diff_var = torch.var(valid_returns - valid_values)
@@ -595,14 +608,14 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     }
 
     # multi-turn conversation
-    if "__num_turns__" in batch.non_tensor_batch:
-        num_turns = batch.non_tensor_batch["__num_turns__"]
+    num_turns = _optional_numeric(batch, "__num_turns__")
+    if num_turns is not None:
         metrics["num_turns/min"] = num_turns.min()
         metrics["num_turns/max"] = num_turns.max()
         metrics["num_turns/mean"] = num_turns.mean()
 
-    if "tool_call_counts" in batch.non_tensor_batch:
-        tool_call_counts = batch.non_tensor_batch["tool_call_counts"]
+    tool_call_counts = _optional_numeric(batch, "tool_call_counts")
+    if tool_call_counts is not None:
         metrics["tool_call_counts/min"] = tool_call_counts.min()
         metrics["tool_call_counts/max"] = tool_call_counts.max()
         metrics["tool_call_counts/mean"] = tool_call_counts.mean()
@@ -610,7 +623,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     return metrics
 
 
-def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> dict[str, Any]:
+def compute_timing_metrics(batch: TensorDict, timing_raw: dict[str, float]) -> dict[str, Any]:
     """
     Computes timing metrics for different processing stages in PPO training.
 
@@ -619,7 +632,7 @@ def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> di
     value computation, advantage computation, and model updates.
 
     Args:
-        batch: A DataProto object containing batch data with responses and attention masks.
+        batch: A TensorDict object containing batch data with responses and attention masks.
         timing_raw: A dictionary mapping stage names to their execution times in seconds.
 
     Returns:
@@ -654,7 +667,7 @@ def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> di
     }
 
 
-def compute_throughout_metrics(batch: DataProto, timing_raw: dict[str, float], n_gpus: int) -> dict[str, Any]:
+def compute_throughout_metrics(batch: TensorDict, timing_raw: dict[str, float], n_gpus: int) -> dict[str, Any]:
     """
     Computes throughput metrics for PPO training.
 
@@ -663,7 +676,7 @@ def compute_throughout_metrics(batch: DataProto, timing_raw: dict[str, float], n
     (tokens per second per GPU).
 
     Args:
-        batch: A DataProto object containing batch data with meta information about token counts.
+        batch: A TensorDict object containing batch data with meta information about token counts.
         timing_raw: A dictionary mapping stage names to their execution times in seconds.
                    Must contain a "step" key with the total step time.
         n_gpus: Number of GPUs used for training.
@@ -678,7 +691,7 @@ def compute_throughout_metrics(batch: DataProto, timing_raw: dict[str, float], n
         The throughput is calculated as total_tokens / (time * n_gpus) to normalize
         across different GPU counts.
     """
-    total_num_tokens = sum(batch.meta_info["global_token_num"])
+    total_num_tokens = sum(tu.item(batch, "global_token_num"))
     time = timing_raw["step"]
     # estimated_flops, promised_flops = flops_function.estimate_flops(num_tokens, time)
     # f'Actual TFLOPs/s/GPU​': estimated_flops/(n_gpus),
@@ -690,7 +703,7 @@ def compute_throughout_metrics(batch: DataProto, timing_raw: dict[str, float], n
     }
 
 
-def compute_variance_proxy_metrics(batch: DataProto, gradient_norm: float = None) -> dict[str, float]:
+def compute_variance_proxy_metrics(batch: TensorDict, gradient_norm: float = None) -> dict[str, float]:
     """
     Compute variance proxy metrics using the simplified expected squared norm approach.
 
@@ -708,22 +721,22 @@ def compute_variance_proxy_metrics(batch: DataProto, gradient_norm: float = None
     metrics = {}
 
     # Check if we have the necessary data (sum_pi_squared is required for W-score)
-    if "sum_pi_squared" not in batch.batch or "old_log_probs" not in batch.batch or "advantages" not in batch.batch:
+    if "sum_pi_squared" not in batch.keys() or "old_log_probs" not in batch.keys() or "advantages" not in batch.keys():
         return metrics
 
     # Compute W(τ) = Σ_t[1 - 2π_t(y_t) + Σπ²]
-    pi_t = torch.exp(batch.batch["old_log_probs"])
-    w_per_timestep = 1 - 2 * pi_t + batch.batch["sum_pi_squared"]
+    pi_t = torch.exp(batch["old_log_probs"])
+    w_per_timestep = 1 - 2 * pi_t + batch["sum_pi_squared"]
 
     # Get response mask to only consider valid tokens
-    response_mask = batch.batch["response_mask"]
+    response_mask = batch["response_mask"]
 
     # Use pre-computed rollout IS weights from batch (for variance proxy consistency with training loss)
     # IS weights are computed centrally in trainer_base.py to avoid duplication
     rollout_is_weights = None
-    if "rollout_is_weights" in batch.batch:
+    if "rollout_is_weights" in batch.keys():
         # Extract pre-computed IS weights from batch (already computed in trainer)
-        rollout_is_weights = batch.batch["rollout_is_weights"]
+        rollout_is_weights = batch["rollout_is_weights"]
 
         # Scale W by (rollout IS weight)² for optimal baseline under biased estimation
         w_per_timestep = w_per_timestep * (rollout_is_weights**2).detach()
@@ -731,7 +744,7 @@ def compute_variance_proxy_metrics(batch: DataProto, gradient_norm: float = None
         # Note: IS weight statistics and mismatch metrics are logged in trainer_base.py
 
     # Get scalar advantages (mean over timesteps)
-    advantages = batch.batch["advantages"]
+    advantages = batch["advantages"]
     # Compute mean advantage per trajectory using masked_mean
     advantages_scalar = verl_F.masked_mean(advantages, response_mask, axis=-1)
 

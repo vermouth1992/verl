@@ -220,12 +220,12 @@ pre-implemented specific dispatch and collect methods,in `decorator.py <https://
 
    from verl.single_controller.base.decorator import register, Dispatch
 
-   @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-   def generate_sequences(self, data: DataProto) -> DataProto:
+   @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
+   def generate_sequences(self, data: TensorDict) -> TensorDict:
        pass
 
-Here it requires the data interface to be ``DataProto``. Definition of
-``DataProto`` is in `protocol.py <https://github.com/verl-project/verl/blob/main/verl/protocol.py>`_.
+Here it requires the data interface to be ``TensorDict``. Definition of
+``TensorDict`` is in `batch_protocol.py <https://github.com/verl-project/verl/blob/main/verl/batch_batch_protocol.py>`_.
 
 Step 3: Main training loop
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

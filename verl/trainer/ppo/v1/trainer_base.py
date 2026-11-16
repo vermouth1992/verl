@@ -35,11 +35,11 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
 from transfer_queue import KVBatchMeta
 
+from verl.batch_protocol import BatchFuture
 from verl.checkpoint_engine import CheckpointEngineManager
 from verl.experimental.agent_loop import AgentLoopManager
 from verl.experimental.reward_loop import RewardLoopManager
 from verl.experimental.teacher_loop import MultiTeacherModelManager
-from verl.protocol import DataProto, DataProtoFuture
 from verl.single_controller.ray import (
     RayClassWithInitArgs,
     RayWorkerGroup,
@@ -1692,26 +1692,27 @@ class PPOTrainer(ABC):
         raw_prompt_arr = np.empty(len(raw_prompts), dtype=object)
         raw_prompt_arr[:] = raw_prompts
 
-        rm_input = DataProto(
-            batch=TensorDict(
-                {"prompts": prompts, "responses": responses, "attention_mask": attention_mask},
-                batch_size=len(batch),
-            ),
-            non_tensor_batch={"raw_prompt": raw_prompt_arr},
+        rm_input = tu.get_tensordict(
+            {
+                "prompts": prompts,
+                "responses": responses,
+                "attention_mask": attention_mask,
+                "raw_prompt": raw_prompt_arr,
+            }
         )
 
         # 3. run the reward model (wakes/sleeps the reward model internally).
         rm_output = self.reward_loop_manager.compute_rm_score(rm_input)
 
         # 4. write rm_scores (and reward extra info) back to TransferQueue.
-        padded_rm_scores = rm_output.batch["rm_scores"]
+        padded_rm_scores = rm_output["rm_scores"]
         rm_scores = torch.nested.as_nested_tensor(
             [padded_rm_scores[i, : response_lengths[i]] for i in range(len(batch))],
             layout=torch.jagged,
         )
         write_back = {"rm_scores": rm_scores}
-        for key in rm_output.meta_info.get("reward_extra_keys", []):
-            write_back[key] = rm_output.non_tensor_batch[key]
+        for key in tu.item(rm_output, "reward_extra_keys", []):
+            write_back[key] = tu.item(rm_output, key)
         tq.kv_batch_put(
             keys=batch.keys,
             partition_id=batch.partition_id,
@@ -1810,13 +1811,13 @@ class PPOTrainer(ABC):
             keys=batch.keys, partition_id=batch.partition_id, fields=data.select("old_log_probs", "entropy")
         )
 
-        data = DataProto(batch=data.to_padded_tensor())
+        data = data.to_padded_tensor()
 
         # 3. calculate actor entroy metrics
         actor_config = self.config.actor_rollout_ref.actor
         entropy_agg = agg_loss(
-            loss_mat=data.batch["entropy"],
-            loss_mask=data.batch["response_mask"],
+            loss_mat=data["entropy"],
+            loss_mask=data["response_mask"],
             loss_agg_mode=actor_config.loss_agg_mode,
             loss_scale_factor=actor_config.loss_scale_factor,
         )
@@ -1868,7 +1869,7 @@ class PPOTrainer(ABC):
             }
         )
         output = self.critic_wg.infer_batch(batch)
-        # TODO: DataProtoFuture support KVBatchMeta
+        # TODO: BatchFuture support KVBatchMeta
         ray.get(output.futures)
 
         # 2. write value back to TransferQueue
@@ -1888,9 +1889,9 @@ class PPOTrainer(ABC):
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
 
         response_mask = data["response_mask"]
-        data = DataProto(batch=data.to_padded_tensor())
-        data.batch["token_level_scores"] = data.batch["rm_scores"]
-        data.non_tensor_batch["uid"] = np.array(data.batch.pop("uid").tolist(), dtype=object)
+        data = data.to_padded_tensor()
+        data["token_level_scores"] = data["rm_scores"]
+        tu.assign_non_tensor_stack(data, "uid", data.pop("uid").tolist())
 
         # 1. apply kl penalty to rewards
         if self.config.algorithm.use_kl_in_reward:
@@ -1899,7 +1900,7 @@ class PPOTrainer(ABC):
             )
             metrics.update(kl_metrics)
         else:
-            data.batch["token_level_rewards"] = data.batch["token_level_scores"]
+            data["token_level_rewards"] = data["token_level_scores"]
 
         # 2. Compute rollout correction: IS weights, rejection sampling, and metrics
         # Only runs in decoupled mode (computes once per batch using stable π_old)
@@ -1907,7 +1908,7 @@ class PPOTrainer(ABC):
         rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
         bypass_recomputing_logprobs = rollout_corr_config and rollout_corr_config.get("bypass_mode", False)
         rollout_correction = (
-            rollout_corr_config is not None and "rollout_log_probs" in data.batch and not bypass_recomputing_logprobs
+            rollout_corr_config is not None and "rollout_log_probs" in data.keys() and not bypass_recomputing_logprobs
         )
         if rollout_correction:
             data, is_metrics = compute_rollout_correction_and_add_to_batch(data, rollout_corr_config)
@@ -1931,12 +1932,12 @@ class PPOTrainer(ABC):
             fields.append("token_level_rewards")
         if rollout_correction:
             fields.append("response_mask")
-            if "rollout_is_weights" in data.batch:
+            if "rollout_is_weights" in data.keys():
                 fields.append("rollout_is_weights")
 
         output = {}
         for field in fields:
-            output[field] = response_to_nested(data.batch[field], response_mask)
+            output[field] = response_to_nested(data[field], response_mask)
         output = TensorDict(output, batch_size=len(batch))
 
         batch = tq.kv_batch_put(keys=batch.keys, partition_id=batch.partition_id, fields=output)
@@ -1957,7 +1958,7 @@ class PPOTrainer(ABC):
         }
         batch.extra_info.update(extra_info)
 
-        output: DataProtoFuture = self.critic_wg.train_mini_batch(batch)
+        output: BatchFuture = self.critic_wg.train_mini_batch(batch)
         output: TensorDict = output.get()
         output = rename_dict(output["metrics"], "critic/")
         output["perf/mfu/critic"] = output.pop("critic/mfu")
@@ -2069,14 +2070,12 @@ class PPOTrainer(ABC):
             data["token_level_rewards"] = data["rm_scores"]
         data["prompt_length"] = prompt_length.float()
         data["response_length"] = response_length.float()
-        batch = DataProto(batch=data, meta_info={"global_token_num": global_token_num})
-        metrics_batch = batch.select_idxs(non_padding_mask) if non_padding_mask.any() else batch
-        # Expose per-row turn counts under the V0 schema (agent_loop writes
-        # ``__num_turns__`` into the non-tensor batch) so compute_data_metrics
-        # emits the V0-compatible ``num_turns/{mean,max,min}`` tags in addition
-        # to the ``training/num_turns/*`` names computed below.
+        tu.assign_non_tensor(data, global_token_num=global_token_num)
+        metrics_batch = tu.index_select_tensor_dict(data, non_padding_mask) if non_padding_mask.any() else data
+        # Keep per-row turn counts on the batch so compute_data_metrics emits
+        # ``num_turns/{mean,max,min}`` in addition to ``training/num_turns/*``.
         num_turns_for_metrics = num_turns[non_padding_mask] if non_padding_mask.any() else num_turns
-        metrics_batch.non_tensor_batch["__num_turns__"] = np.asarray(num_turns_for_metrics, dtype=np.int32)
+        metrics_batch["__num_turns__"] = torch.as_tensor(num_turns_for_metrics, dtype=torch.int32)
 
         # 2. compute metrics
         metrics["training/global_step"] = global_steps

@@ -14,9 +14,11 @@
 
 import inspect
 
-from verl import DataProto
+from tensordict import TensorDict
+
 from verl.experimental.reward_loop.reward_manager import register
 from verl.experimental.reward_loop.reward_manager.base import RewardManagerBase
+from verl.utils import tensordict_utils as tu
 from verl.utils.reward_score import default_compute_score
 
 
@@ -31,23 +33,23 @@ class NaiveRewardManager(RewardManagerBase):
         self.reward_router_address = reward_router_address
         self.reward_model_tokenizer = reward_model_tokenizer
 
-    async def run_single(self, data: DataProto) -> dict:
+    async def run_single(self, data: TensorDict) -> dict:
         data = data[-1:]  # for multi-sequence outputs, we only compute reward based on the last sequence
         data_item = data[0]
-        response_ids = data_item.batch["responses"]
+        response_ids = data_item["responses"]
         response_length = response_ids.shape[-1]
-        valid_response_length = data_item.batch["attention_mask"][-response_length:].sum()
+        valid_response_length = data_item["attention_mask"][-response_length:].sum()
         valid_response_ids = response_ids[:valid_response_length]
 
-        data_source = data_item.non_tensor_batch["data_source"]
-        ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
-        extra_info = data_item.non_tensor_batch.get("extra_info", {})
-        tool_extra_fields = data_item.non_tensor_batch.get("tool_extra_fields", None)
+        data_source = tu.item(data_item, "data_source")
+        ground_truth = tu.item(data_item, "reward_model")["ground_truth"]
+        extra_info = tu.item(data_item, "extra_info", {})
+        tool_extra_fields = tu.item(data_item, "tool_extra_fields", None)
         if tool_extra_fields is not None:
             extra_info.update(tool_extra_fields.items())
 
-        num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
-        rollout_reward_scores = data_item.non_tensor_batch.get("reward_scores", {})
+        num_turns = tu.item(data_item, "__num_turns__", None)
+        rollout_reward_scores = tu.item(data_item, "reward_scores", {})
         extra_info["num_turns"] = num_turns
         extra_info["rollout_reward_scores"] = rollout_reward_scores
 

@@ -272,14 +272,13 @@ def _postprocess_common(output, put_data, need_collect):
                  If True, output will be put to TQ and return the corresponding BatchMeta;
                  if False, output will not be put into TQ.
         need_collect: bool, indicating whether this process needs to collect data.
-                     If False, the output will be replaced by an empty BatchMeta or DataProto
+                     If False, the output will be replaced by an empty BatchMeta or TensorDict
                      to avoid redundant communication.
 
     Returns:
         - BatchMeta.empty(): When put_data=True but need_collect=False, indicating
           no data should be stored but BatchMeta structure is expected.
-        - DataProto(): When put_data=False, need_collect=False, and output is DataProto,
-          returning an empty DataProto.
+        - An empty TensorDict when put_data=False, need_collect=False, and output is a TensorDict.
         - output: In all other cases, returns the original output unchanged.
 
     Note:
@@ -287,12 +286,8 @@ def _postprocess_common(output, put_data, need_collect):
         across different execution paths and avoid redundant data operations in
         distributed scenarios.
     """
-    from verl.protocol import DataProto
-
     if put_data and not need_collect:
         return BatchMeta()
-    elif not put_data and not need_collect and isinstance(output, DataProto):
-        return DataProto()
     elif not put_data and not need_collect and isinstance(output, TensorDict):
         return TensorDict({}, batch_size=(0,))
     else:

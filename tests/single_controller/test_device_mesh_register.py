@@ -19,9 +19,9 @@ import torch
 from tensordict import TensorDict
 
 import verl.utils.tensordict_utils as tu
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.base import Worker
-from verl.single_controller.base.decorator import make_nd_compute_dataproto_dispatch_fn, register
+from verl.single_controller.base.decorator import make_nd_compute_batch_dispatch_fn, register
 from verl.utils.device import get_device_name, get_nccl_backend, get_torch_device
 
 
@@ -53,31 +53,31 @@ class TestActor(Worker):
             and self.train_device_mesh["pp"].get_local_rank() == 1,
         )
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="infer"))
-    def generate_data_proto(self, data: DataProto):
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="infer"))
+    def generate_data_proto(self, data: TensorDict):
         tp_rank = self.infer_device_mesh["tp"].get_local_rank()
         dp_rank = self.infer_device_mesh["dp"].get_local_rank()
-        data.batch["a"] += (tp_rank + 1) * dp_rank
+        data["a"] += (tp_rank + 1) * dp_rank
         return data
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="infer"))
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="infer"))
     def generate_tensordict(self, data: TensorDict):
         tp_rank = self.infer_device_mesh["tp"].get_local_rank()
         dp_rank = self.infer_device_mesh["dp"].get_local_rank()
         data["a"] += (tp_rank + 1) * dp_rank
         return data
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"))
-    def train_data_proto(self, data: DataProto):
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="train"))
+    def train_data_proto(self, data: TensorDict):
         tp_rank = self.train_device_mesh["tp"].get_local_rank()
         dp_rank = self.train_device_mesh["dp"].get_local_rank()
         pp_rank = self.train_device_mesh["pp"].get_local_rank()
-        data.batch["a"] += (tp_rank + 1) * (dp_rank + 2) * (pp_rank + 3)
+        data["a"] += (tp_rank + 1) * (dp_rank + 2) * (pp_rank + 3)
         # tp rank 0, pp rank 1, dp rank 0, output data added: 8 + 3 = 11
         # tp rank 0, pp rank 1, dp rank 1, output data added: 12 + 4 = 16
         return data
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"))
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="train"))
     def train_tensordict(self, data: TensorDict):
         tp_rank = self.train_device_mesh["tp"].get_local_rank()
         dp_rank = self.train_device_mesh["dp"].get_local_rank()
@@ -87,7 +87,7 @@ class TestActor(Worker):
         # tp rank 0, pp rank 1, dp rank 1, output data added: 12 + 4 = 16
         return data
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="infer"))
+    @register(dispatch_mode=make_nd_compute_batch_dispatch_fn(mesh_name="infer"))
     def generate_nested_tensor(self, data: TensorDict):
         tp_rank = self.infer_device_mesh["tp"].get_local_rank()
         dp_rank = self.infer_device_mesh["dp"].get_local_rank()
@@ -114,25 +114,25 @@ def test_dist_global_info_wg():
     resource_pool = RayResourcePool(process_on_nodes=[ngpus])
     wg = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=ray_cls, device_name=get_device_name())
 
-    infer_input_data_proto = DataProto.from_single_dict(data={"a": torch.tensor([1, 2])})
+    infer_input_data_proto = tu.batch_from_single_dict(data={"a": torch.tensor([1, 2])})
     infer_output_data_proto = wg.generate_data_proto(infer_input_data_proto)
 
     expected_infer_dispatch = [d for d in range(2) for _ in range(infer_tp)]
     assert wg._dispatch_info["infer"] == expected_infer_dispatch
 
-    assert torch.all(torch.eq(infer_output_data_proto.batch["a"], torch.tensor([1, 3])))
+    assert torch.all(torch.eq(infer_output_data_proto["a"], torch.tensor([1, 3])))
 
     infer_input_tensordict = infer_input_data_proto.to_tensordict()
     infer_output_tensordict = wg.generate_tensordict(infer_input_tensordict)
     assert torch.all(torch.eq(infer_output_tensordict["a"], torch.tensor([1, 3])))
 
-    train_input_data_proto = DataProto.from_single_dict(data={"a": torch.tensor([3, 4])})
+    train_input_data_proto = tu.batch_from_single_dict(data={"a": torch.tensor([3, 4])})
     train_output_data_proto = wg.train_data_proto(train_input_data_proto)
 
     expected_train_dispatch = [d for _ in range(2) for d in range(2) for _ in range(train_tp)]
     assert wg._dispatch_info["train"] == expected_train_dispatch
 
-    assert torch.all(torch.eq(train_output_data_proto.batch["a"], torch.tensor([11, 16])))
+    assert torch.all(torch.eq(train_output_data_proto["a"], torch.tensor([11, 16])))
 
     train_input_tensordict = train_input_data_proto.to_tensordict()
     train_output_tensordict = wg.train_tensordict(train_input_tensordict)

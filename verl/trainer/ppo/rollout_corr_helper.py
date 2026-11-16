@@ -66,7 +66,9 @@ from typing import Any, Optional
 import torch
 
 import verl.utils.torch_functional as verl_F
-from verl.protocol import DataProto
+from tensordict import TensorDict
+
+from verl.utils import tensordict_utils as tu
 from verl.trainer.config.algorithm import RolloutCorrectionConfig
 
 # Safety bound to prevent numerical overflow/underflow when exponentiating
@@ -791,7 +793,7 @@ def compute_rollout_correction_and_rejection_mask(
     rollout_is_batch_normalize: bool = False,
     rollout_rs: Optional[str] = None,
     rollout_rs_threshold: Optional[str | float] = None,
-) -> tuple[Optional[DataProto], torch.Tensor, dict[str, float]]:
+) -> tuple[Optional[TensorDict], torch.Tensor, dict[str, float]]:
     """Unified interface for computing IS weights and rejection masks.
 
     This function combines IS weight calculation (truncated) and rejection sampling (masked)
@@ -823,7 +825,7 @@ def compute_rollout_correction_and_rejection_mask(
 
     Returns:
         Tuple containing:
-            rollout_is_weights_proto: DataProto with IS weights (None if rollout_is is None),
+            rollout_is_weights_proto: TensorDict with IS weights (None if rollout_is is None),
                 key "rollout_is_weights", shape (batch_size, seq_length).
             modified_response_mask: Response mask with rejection sampling applied,
                 shape (batch_size, seq_length).
@@ -892,10 +894,10 @@ def compute_rollout_correction_and_rejection_mask(
         else:
             metrics_scalar[f"rollout_corr/{key}"] = value
 
-    # Step 7: Wrap IS weights in DataProto for consistency with API
-    rollout_is_weights_proto: Optional[DataProto] = None
+    # Step 7: Wrap IS weights in TensorDict for consistency with API
+    rollout_is_weights_proto: Optional[TensorDict] = None
     if rollout_is_weights is not None:
-        rollout_is_weights_proto = DataProto.from_dict(tensors={"rollout_is_weights": rollout_is_weights})
+        rollout_is_weights_proto = tu.get_tensordict({"rollout_is_weights": rollout_is_weights})
 
     return rollout_is_weights_proto, modified_response_mask, metrics_scalar
 
@@ -1023,8 +1025,8 @@ def compute_offpolicy_metrics(
 
 
 def compute_rollout_correction_and_add_to_batch(
-    batch: DataProto, rollout_corr_config: RolloutCorrectionConfig
-) -> tuple[DataProto, dict]:
+    batch: TensorDict, rollout_corr_config: RolloutCorrectionConfig
+) -> tuple[TensorDict, dict]:
     """Compute rollout correction weights and apply rejection sampling.
 
     Computes importance sampling weights to correct for off-policy issues between
@@ -1040,7 +1042,7 @@ def compute_rollout_correction_and_add_to_batch(
     - Metrics can be monitored before enabling IS weight correction
 
     Args:
-        batch: DataProto with old_log_probs, rollout_log_probs, response_mask
+        batch: TensorDict with old_log_probs, rollout_log_probs, response_mask
 
     Returns:
         Tuple of (updated_batch, metrics):
@@ -1059,9 +1061,9 @@ def compute_rollout_correction_and_add_to_batch(
 
     # Compute IS weights and get modified response_mask
     rollout_is_weights, modified_response_mask, rollout_corr_metrics = compute_rollout_correction_and_rejection_mask(
-        old_log_prob=batch.batch["old_log_probs"],
-        rollout_log_prob=batch.batch["rollout_log_probs"],
-        response_mask=batch.batch["response_mask"],
+        old_log_prob=batch["old_log_probs"],
+        rollout_log_prob=batch["rollout_log_probs"],
+        response_mask=batch["response_mask"],
         rollout_is=rollout_is,
         rollout_is_threshold=rollout_is_threshold,
         rollout_is_batch_normalize=rollout_is_batch_normalize,
@@ -1070,11 +1072,11 @@ def compute_rollout_correction_and_add_to_batch(
     )
 
     # ALWAYS update response_mask with rejection applied
-    batch.batch["response_mask"] = modified_response_mask
+    batch["response_mask"] = modified_response_mask
 
     # Add IS weights to batch if computed
     if rollout_is_weights is not None:
-        batch = batch.union(rollout_is_weights)
+        batch = tu.union_tensor_dict(batch, rollout_is_weights)
 
     return batch, rollout_corr_metrics
 

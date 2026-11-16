@@ -17,9 +17,9 @@ from abc import ABC, abstractmethod
 from typing import Generator
 
 import torch
+from tensordict import TensorDict
 from torch.distributed.device_mesh import DeviceMesh
 
-from verl import DataProto
 from verl.utils.config import omega_conf_to_dataclass
 from verl.workers.config import HFModelConfig, RolloutConfig
 
@@ -74,7 +74,7 @@ class BaseRollout(ABC):
         """Release weights and kv cache in GPU memory."""
         pass
 
-    def generate_sequences(self, prompts: DataProto) -> DataProto:
+    def generate_sequences(self, prompts: TensorDict) -> TensorDict:
         """Batch generate sequences in sync mode.
 
         Args:

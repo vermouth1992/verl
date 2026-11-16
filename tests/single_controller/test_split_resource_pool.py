@@ -17,7 +17,7 @@ import os
 import ray
 import torch
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.single_controller.ray.base import (
@@ -27,6 +27,7 @@ from verl.single_controller.ray.base import (
     split_resource_pool,
 )
 from verl.utils.device import get_device_name, get_nccl_backend, get_torch_device
+from tensordict import TensorDict
 
 
 def get_local_gpus_num(division=1):
@@ -45,9 +46,9 @@ class Actor(Worker):
             world_size = int(os.environ.get("WORLD_SIZE", 1))
             torch.distributed.init_process_group(backend=get_nccl_backend(), world_size=world_size, rank=rank)
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def add(self, data: DataProto):
-        data.batch["a"] += self.rank + self.worker_id
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH)
+    def add(self, data: TensorDict):
+        data["a"] += self.rank + self.worker_id
         return data
 
 
@@ -73,11 +74,11 @@ def test_split_resource_pool_with_split_size():
     assert actor_worker_1.world_size == half
     assert actor_worker_2.world_size == half
 
-    data = DataProto.from_dict({"a": torch.zeros(ngpus)})
+    data = tu.batch_from_dict({"a": torch.zeros(ngpus)})
     actor_output_1 = actor_worker_1.add(data)
     actor_output_2 = actor_worker_2.add(data)
-    assert actor_output_1.batch["a"].tolist() == [float(r) for r in range(half) for _ in range(2)]
-    assert actor_output_2.batch["a"].tolist() == [float(r + 100) for r in range(half) for _ in range(2)]
+    assert actor_output_1["a"].tolist() == [float(r) for r in range(half) for _ in range(2)]
+    assert actor_output_2["a"].tolist() == [float(r + 100) for r in range(half) for _ in range(2)]
 
     ray.shutdown()
 
@@ -104,14 +105,14 @@ def test_split_resource_pool_with_split_size_list():
     assert actor_worker_1.world_size == quarter
     assert actor_worker_2.world_size == 3 * quarter
 
-    data_1 = DataProto.from_dict({"a": torch.zeros(quarter)})
-    data_2 = DataProto.from_dict({"a": torch.zeros(3 * quarter)})
+    data_1 = tu.batch_from_dict({"a": torch.zeros(quarter)})
+    data_2 = tu.batch_from_dict({"a": torch.zeros(3 * quarter)})
     actor_output_1 = actor_worker_1.add(data_1)
     actor_output_2 = actor_worker_2.add(data_2)
-    print(actor_output_1.batch["a"].tolist())
-    print(actor_output_2.batch["a"].tolist())
-    assert actor_output_1.batch["a"].tolist() == list(range(quarter))
-    assert actor_output_2.batch["a"].tolist() == list(range(100, 100 + 3 * quarter))
+    print(actor_output_1["a"].tolist())
+    print(actor_output_2["a"].tolist())
+    assert actor_output_1["a"].tolist() == list(range(quarter))
+    assert actor_output_2["a"].tolist() == list(range(100, 100 + 3 * quarter))
 
     ray.shutdown()
 
@@ -140,14 +141,14 @@ def test_split_resource_pool_with_split_size_list_cross_nodes():
     assert actor_worker_1.world_size == quarter
     assert actor_worker_2.world_size == 3 * quarter
 
-    data_1 = DataProto.from_dict({"a": torch.zeros(quarter)})
-    data_2 = DataProto.from_dict({"a": torch.zeros(3 * quarter)})
+    data_1 = tu.batch_from_dict({"a": torch.zeros(quarter)})
+    data_2 = tu.batch_from_dict({"a": torch.zeros(3 * quarter)})
     actor_output_1 = actor_worker_1.add(data_1)
     actor_output_2 = actor_worker_2.add(data_2)
-    print(actor_output_1.batch["a"].tolist())
-    print(actor_output_2.batch["a"].tolist())
-    assert actor_output_1.batch["a"].tolist() == list(range(quarter))
-    assert actor_output_2.batch["a"].tolist() == list(range(100, 100 + 3 * quarter))
+    print(actor_output_1["a"].tolist())
+    print(actor_output_2["a"].tolist())
+    assert actor_output_1["a"].tolist() == list(range(quarter))
+    assert actor_output_2["a"].tolist() == list(range(100, 100 + 3 * quarter))
 
     ray.shutdown()
 
@@ -177,9 +178,9 @@ def test_split_resource_pool_with_split_twice():
     for idx, rp in enumerate(fp_list):
         actor_cls = RayClassWithInitArgs(cls=Actor, worker_id=idx * 100)
         actor_worker = RayWorkerGroup(resource_pool=rp, ray_cls_with_init=actor_cls, device_name=get_device_name())
-        data = DataProto.from_dict({"a": torch.zeros(4)})
+        data = tu.batch_from_dict({"a": torch.zeros(4)})
         actor_output = actor_worker.add(data)
         assert actor_worker.world_size == correct_world_size[idx]
-        assert actor_output.batch["a"].tolist() == correct_output[idx]
+        assert actor_output["a"].tolist() == correct_output[idx]
 
     ray.shutdown()

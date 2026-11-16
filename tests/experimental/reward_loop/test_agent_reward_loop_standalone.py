@@ -19,7 +19,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 from verl.experimental.agent_loop import AgentLoopManager
 from verl.experimental.reward_loop import RewardLoopManager
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.trainer.ppo.utils import create_rl_sampler
 from verl.utils import hf_tokenizer
 from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
@@ -116,12 +116,12 @@ def test_agent_reward_loop_standalone():
 
     # 3. generate responses
     batch_dict = next(iter(dataloader))
-    batch = DataProto.from_single_dict(batch_dict)
+    batch = tu.batch_from_single_dict(batch_dict)
 
     # standalone reward model should wake up for agent_reward_loop
     gen_batch = agent_loop_manager.generate_sequences(prompts=batch)
 
-    rm_scores = gen_batch.batch["rm_scores"]
+    rm_scores = gen_batch["rm_scores"]
     sample_scores = rm_scores.sum(dim=1)
     print(sample_scores)
 

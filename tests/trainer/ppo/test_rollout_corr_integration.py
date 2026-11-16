@@ -24,6 +24,7 @@ from verl.trainer.ppo.rollout_corr_helper import (
 )
 from verl.utils.device import get_device_name, is_device_available
 from verl.workers.config.actor import ActorConfig
+from tensordict import TensorDict
 
 
 class TestRolloutISIntegration:
@@ -75,7 +76,7 @@ class TestRolloutISIntegration:
             rollout_rs=None,
         )
 
-        rollout_is_weights = rollout_is_weights_proto.batch["rollout_is_weights"]
+        rollout_is_weights = rollout_is_weights_proto["rollout_is_weights"]
 
         # Policy loss function receives pre-computed IS weights
         pg_loss, _ = compute_policy_loss_vanilla(
@@ -106,10 +107,10 @@ class TestRolloutISIntegration:
         )
 
         # Check weights
-        from verl.protocol import DataProto
+        from verl.utils import tensordict_utils as tu
 
-        assert isinstance(weights_proto, DataProto)
-        weights = weights_proto.batch["rollout_is_weights"]
+        assert isinstance(weights_proto, TensorDict)
+        weights = weights_proto["rollout_is_weights"]
         assert isinstance(weights, torch.Tensor)
         assert weights.shape == sample_data["old_log_prob"].shape
 
@@ -217,7 +218,7 @@ class TestRolloutISIntegration:
         )
 
         # Compare to loss WITH weights (rollout_is=True)
-        rollout_is_weights = rollout_is_weights_proto.batch["rollout_is_weights"]
+        rollout_is_weights = rollout_is_weights_proto["rollout_is_weights"]
         pg_loss_with_weights, _ = compute_policy_loss_vanilla(
             old_log_prob=sample_data["old_log_prob"],
             log_prob=sample_data["log_prob"],
@@ -250,7 +251,7 @@ class TestRolloutISIntegration:
             rollout_rs=None,
         )
 
-        rollout_is_weights = rollout_is_weights_proto.batch["rollout_is_weights"]
+        rollout_is_weights = rollout_is_weights_proto["rollout_is_weights"]
         expected_weights = torch.tensor([[0.60653067, 0.0, 0.81873075]], device=device)
         expected_loss = torch.mean(expected_weights * (-advantages))
 

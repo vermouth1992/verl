@@ -20,7 +20,7 @@ import torch
 from server import Trainer
 from tensordict import TensorDict
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.single_controller.ray import RayClassWithInitArgs, RayWorkerGroup
 from verl.utils.device import get_device_name
 
@@ -46,13 +46,10 @@ if __name__ == "__main__":
     attention_mask = torch.ones_like(input_ids)
     position_ids = compute_position_id_with_mask(attention_mask)
 
-    data = DataProto(
-        batch=TensorDict(
+    data = tu.get_tensordict({**TensorDict(
             {"input_ids": input_ids, "attention_mask": attention_mask, "position_ids": position_ids},
             batch_size=batch_size,
-        ),
-        meta_info={},
-    )
+        ).to_dict(), **{}}, {})
 
     output = worker_group.train_model(data)
 

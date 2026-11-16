@@ -107,14 +107,14 @@ The rewards can be categorized as follows:
 
    class RewardLoopWorker:
 
-      async def compute_score_batch(self, data: DataProto) -> list[dict]:
+      async def compute_score_batch(self, data: TensorDict) -> list[dict]:
          tasks = []
          for i in range(len(data)):
             tasks.append(asyncio.create_task(self.compute_score(data[i : i + 1])))
          outputs = await asyncio.gather(*tasks)
          return outputs
 
-      async def compute_score(self, data: DataProto) -> dict:
+      async def compute_score(self, data: TensorDict) -> dict:
          if self.config.reward.custom_reward_function.path is not None:
             # directly use user-customized reward function
             return await self.reward_manager.run_single(data)
@@ -144,7 +144,7 @@ Users can also customize their own ``RewardManager``, inheriting from ``RewardMa
 
    @register("user_costomized")
    class UserCostomizedRewardManager(RewardManagerBase):
-      async def run_single(self, data: DataProto) -> dict:
+      async def run_single(self, data: TensorDict) -> dict:
          data_item = data[-1]
          # your own reward manager
          ...

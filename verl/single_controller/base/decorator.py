@@ -15,7 +15,7 @@ import inspect
 from functools import partial, wraps
 from types import FunctionType
 
-from verl.protocol import DataProtoFuture, _padding_size_key
+from verl.batch_protocol import PADDING_SIZE_KEY, BatchFuture
 from verl.utils.py_functional import DynamicEnum
 from verl.utils.transferqueue_utils import tqbridge
 
@@ -40,8 +40,8 @@ def init_predefined_dispatch_mode():
     Dispatch.register("ONE_TO_ALL")
     Dispatch.register("ALL_TO_ALL")
     Dispatch.register("DP_COMPUTE")
-    Dispatch.register("DP_COMPUTE_PROTO")
-    Dispatch.register("DP_COMPUTE_PROTO_WITH_FUNC")
+    Dispatch.register("DP_COMPUTE_BATCH")
+    Dispatch.register("DP_COMPUTE_BATCH_WITH_FUNC")
     Dispatch.register("DP_COMPUTE_METRIC")
     # This is a special dispatch mode for vllm ExternalRayDistributedExecutor
     Dispatch.register("DIRECT_ROLLOUT_METHOD")
@@ -68,8 +68,8 @@ init_predefined_dispatch_mode()
 init_predefined_execute_mode()
 
 
-def _split_args_kwargs_data_proto(chunks, *args, **kwargs):
-    from verl.protocol import BatchData
+def _split_args_kwargs_batch(chunks, *args, **kwargs):
+    from verl.batch_protocol import BatchData
 
     splitted_args = []
     for arg in args:
@@ -88,31 +88,31 @@ def _split_args_kwargs_data_proto(chunks, *args, **kwargs):
     return splitted_args, splitted_kwargs
 
 
-def _split_args_kwargs_data_proto_with_auto_padding(chunks, *args, **kwargs):
-    from verl.protocol import DataProto, DataProtoFuture
+def _split_args_kwargs_batch_with_auto_padding(chunks, *args, **kwargs):
+    from tensordict import TensorDict
 
-    data_proto_len = None
+    from verl.batch_protocol import BatchData
+    from verl.utils.tensordict_utils import pad_batch, padding_enabled
+
+    data_len = None
     padding_size = None
 
     def _padding_and_split_data(obj, chunks):
-        nonlocal data_proto_len, padding_size
-        assert isinstance(obj, DataProto | DataProtoFuture)
-        if isinstance(obj, DataProto) and obj.is_padding_enabled():
-            # for padding, we only support DataProto with same length
-            if data_proto_len is None:
-                data_proto_len = len(obj)
-                padding_size = (chunks - (data_proto_len % chunks)) if (data_proto_len % chunks > 0) else 0
+        nonlocal data_len, padding_size
+        assert isinstance(obj, TensorDict | BatchFuture)
+        if isinstance(obj, TensorDict) and padding_enabled(obj):
+            if data_len is None:
+                data_len = len(obj)
+                padding_size = (chunks - (data_len % chunks)) if (data_len % chunks > 0) else 0
             else:
-                assert data_proto_len == len(obj), (
-                    f"expecting all arg share same length of {data_proto_len}, but got {len(obj)}"
-                )
-            obj.padding(padding_size=padding_size)
-        return obj.chunk(chunks=chunks)
+                assert data_len == len(obj), f"expecting all arg share same length of {data_len}, but got {len(obj)}"
+            obj = pad_batch(obj, padding_size=padding_size)
+        return BatchData(obj).chunk(chunks=chunks)
 
     splitted_args = [_padding_and_split_data(arg, chunks) for arg in args]
     splitted_kwargs = {key: _padding_and_split_data(val, chunks) for key, val in kwargs.items()}
     if padding_size is not None:
-        splitted_kwargs[_padding_size_key] = padding_size
+        splitted_kwargs[PADDING_SIZE_KEY] = padding_size
 
     return splitted_args, splitted_kwargs
 
@@ -135,8 +135,8 @@ def collect_all_to_all(worker_group, output):
     return output
 
 
-def _concat_data_proto_or_future(output: list):
-    from verl.protocol import BatchData
+def _concat_batch_or_future(output: list):
+    from verl.batch_protocol import BatchData
 
     # make sure all the elements in output has the same type
     for o in output:
@@ -164,12 +164,12 @@ def collect_dp_compute(worker_group, output):
     return output
 
 
-def dispatch_dp_compute_data_proto(worker_group, *args, **kwargs):
+def dispatch_dp_compute_batch(worker_group, *args, **kwargs):
     from verl.single_controller.base.worker_group import WorkerGroup
 
     assert isinstance(worker_group, WorkerGroup)
     # Note: enable auto padding for dp compute DatapProto
-    splitted_args, splitted_kwargs = _split_args_kwargs_data_proto_with_auto_padding(
+    splitted_args, splitted_kwargs = _split_args_kwargs_batch_with_auto_padding(
         worker_group.world_size,
         *args,
         **kwargs,
@@ -177,26 +177,26 @@ def dispatch_dp_compute_data_proto(worker_group, *args, **kwargs):
     return splitted_args, splitted_kwargs
 
 
-def dispatch_dp_compute_data_proto_with_func(worker_group, *args, **kwargs):
+def dispatch_dp_compute_batch_with_func(worker_group, *args, **kwargs):
     from verl.single_controller.base.worker_group import WorkerGroup
 
     assert isinstance(worker_group, WorkerGroup)
     assert isinstance(args[0], FunctionType)  # NOTE: The first one args is a function!
 
-    splitted_args, splitted_kwargs = _split_args_kwargs_data_proto(worker_group.world_size, *args[1:], **kwargs)
+    splitted_args, splitted_kwargs = _split_args_kwargs_batch(worker_group.world_size, *args[1:], **kwargs)
     splitted_args_with_func = [[args[0]] * worker_group.world_size] + splitted_args
     return splitted_args_with_func, splitted_kwargs
 
 
-def collect_dp_compute_data_proto(worker_group, output):
-    from verl.protocol import BatchData
+def collect_dp_compute_batch(worker_group, output):
+    from verl.batch_protocol import BatchData
 
     assert BatchData(output).is_concatable(), (
         f"expecting concatable output, but got element type {type(output[0]) if output else 'empty'}"
     )
 
     output = collect_dp_compute(worker_group, output)
-    return _concat_data_proto_or_future(output)
+    return _concat_batch_or_future(output)
 
 
 def dispatch_nd_compute(dp_rank_mapping: list[int], dp_size, worker_group, *args, **kwargs):
@@ -247,23 +247,23 @@ def collect_nd_compute(collect_mask: list[bool], worker_group, output):
     return output_in_dp
 
 
-def dispatch_nd_compute_dataproto(dp_rank_mapping: list[int], dp_size, worker_group, *args, **kwargs):
-    splitted_args, splitted_kwargs = _split_args_kwargs_data_proto(dp_size, *args, **kwargs)
+def dispatch_nd_compute_batch(dp_rank_mapping: list[int], dp_size, worker_group, *args, **kwargs):
+    splitted_args, splitted_kwargs = _split_args_kwargs_batch(dp_size, *args, **kwargs)
     return dispatch_nd_compute(dp_rank_mapping, dp_size, worker_group, *splitted_args, **splitted_kwargs)
 
 
-def collect_nd_compute_dataproto(collect_mask: list[bool], worker_group, output):
+def collect_nd_compute_batch(collect_mask: list[bool], worker_group, output):
     output = collect_nd_compute(collect_mask, worker_group, output)
 
-    from verl.protocol import BatchData
+    from verl.batch_protocol import BatchData
 
     assert BatchData(output).is_concatable(), (
         f"expecting concatable output, but got element type {type(output[0]) if output else 'empty'}"
     )
-    return _concat_data_proto_or_future(output)
+    return _concat_batch_or_future(output)
 
 
-def dispatch_lazy_compute_data_proto(mesh_name, worker_group, *args, **kwargs):
+def dispatch_lazy_compute_batch(mesh_name, worker_group, *args, **kwargs):
     from verl.single_controller.base.worker_group import WorkerGroup
 
     assert isinstance(worker_group, WorkerGroup)
@@ -276,10 +276,10 @@ def dispatch_lazy_compute_data_proto(mesh_name, worker_group, *args, **kwargs):
     dp_rank_mapping = worker_group._dispatch_info[mesh_name]
     # perform dispatch
     dp_size = max(dp_rank_mapping) + 1
-    return dispatch_nd_compute_dataproto(dp_rank_mapping, dp_size, worker_group, *args, **kwargs)
+    return dispatch_nd_compute_batch(dp_rank_mapping, dp_size, worker_group, *args, **kwargs)
 
 
-def collect_lazy_compute_data_proto(mesh_name, worker_group, *args, **kwargs):
+def collect_lazy_compute_batch(mesh_name, worker_group, *args, **kwargs):
     from verl.single_controller.base.worker_group import WorkerGroup
 
     assert isinstance(worker_group, WorkerGroup)
@@ -294,13 +294,14 @@ def collect_lazy_compute_data_proto(mesh_name, worker_group, *args, **kwargs):
     # a boolean of whether the dp_rank is used for collect
     collect_mask = worker_group._collect_info[mesh_name]
     # perform dispatch
-    return collect_nd_compute_dataproto(collect_mask, worker_group, *args, **kwargs)
+    return collect_nd_compute_batch(collect_mask, worker_group, *args, **kwargs)
 
 
-def make_nd_compute_dataproto_dispatch_fn(mesh_name):
+def make_nd_compute_batch_dispatch_fn(mesh_name):
+    """Build dispatch and collect functions for one named worker mesh."""
     return {
-        "dispatch_fn": partial(dispatch_lazy_compute_data_proto, mesh_name),
-        "collect_fn": partial(collect_lazy_compute_data_proto, mesh_name),
+        "dispatch_fn": partial(dispatch_lazy_compute_batch, mesh_name),
+        "collect_fn": partial(collect_lazy_compute_batch, mesh_name),
     }
 
 
@@ -315,15 +316,15 @@ DISPATCH_MODE_FN_REGISTRY = {
         "collect_fn": collect_all_to_all,
     },
     Dispatch.DP_COMPUTE: {"dispatch_fn": dispatch_dp_compute, "collect_fn": collect_dp_compute},
-    Dispatch.DP_COMPUTE_PROTO: {
-        "dispatch_fn": dispatch_dp_compute_data_proto,
-        "collect_fn": collect_dp_compute_data_proto,
+    Dispatch.DP_COMPUTE_BATCH: {
+        "dispatch_fn": dispatch_dp_compute_batch,
+        "collect_fn": collect_dp_compute_batch,
     },
-    Dispatch.DP_COMPUTE_PROTO_WITH_FUNC: {
-        "dispatch_fn": dispatch_dp_compute_data_proto_with_func,
-        "collect_fn": collect_dp_compute_data_proto,
+    Dispatch.DP_COMPUTE_BATCH_WITH_FUNC: {
+        "dispatch_fn": dispatch_dp_compute_batch_with_func,
+        "collect_fn": collect_dp_compute_batch,
     },
-    Dispatch.DP_COMPUTE_METRIC: {"dispatch_fn": dispatch_dp_compute_data_proto, "collect_fn": collect_dp_compute},
+    Dispatch.DP_COMPUTE_METRIC: {"dispatch_fn": dispatch_dp_compute_batch, "collect_fn": collect_dp_compute},
     Dispatch.DIRECT_ROLLOUT_METHOD: {
         "dispatch_fn": dummy_direct_rollout_call,
         "collect_fn": dummy_direct_rollout_call,
@@ -383,12 +384,12 @@ def _check_execute_mode(execute_mode):
 def _materialize_futures(*args, **kwargs):
     new_args = []
     for arg in args:
-        if isinstance(arg, DataProtoFuture):
+        if isinstance(arg, BatchFuture):
             arg = arg.get()
         # add more type to materialize
         new_args.append(arg)
     for k, v in kwargs.items():
-        if isinstance(v, DataProtoFuture):
+        if isinstance(v, BatchFuture):
             kwargs[k] = v.get()
 
     new_args = tuple(new_args)

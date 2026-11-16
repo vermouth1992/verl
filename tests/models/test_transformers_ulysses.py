@@ -24,7 +24,7 @@ from torch.distributed import init_device_mesh
 from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig, Qwen2Config
 
 from verl.models.transformers.monkey_patch import apply_monkey_patch
-from verl.protocol import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.attention_utils import index_first_axis, rearrange, unpad_input
 from verl.utils.device import get_device_name, get_torch_device
 from verl.utils.distributed import initialize_global_process_group
@@ -141,14 +141,14 @@ def _hf_casual_fwd(config, sp_size, dp_size):
         "position_ids": position_ids.int().to(get_device_name()),
     }
 
-    model_inputs = DataProto.from_dict(model_inputs)
+    model_inputs = tu.batch_from_dict(model_inputs)
 
     # 1. perform ulysses forward
     with sharding_manager:
         model_inputs = sharding_manager.preprocess_data(model_inputs)
-        input_ids = model_inputs.batch["input_ids"]
-        attention_mask = model_inputs.batch["attention_mask"]
-        position_ids = model_inputs.batch["position_ids"]
+        input_ids = model_inputs["input_ids"]
+        attention_mask = model_inputs["attention_mask"]
+        position_ids = model_inputs["position_ids"]
         input_ids_rmpad, indices, *_ = unpad_input(
             input_ids.unsqueeze(-1), attention_mask
         )  # input_ids_rmpad (total_nnz, ...)
@@ -220,14 +220,14 @@ def _hf_casual_fwd_bwd(config, sp_size, dp_size):
         "position_ids": position_ids.int().to(get_device_name()),
     }
 
-    model_inputs = DataProto.from_dict(model_inputs)
+    model_inputs = tu.batch_from_dict(model_inputs)
 
     # 1. perform ulysses forward
     with sharding_manager:
         model_inputs = sharding_manager.preprocess_data(model_inputs)
-        input_ids = model_inputs.batch["input_ids"]
-        attention_mask = model_inputs.batch["attention_mask"]
-        position_ids = model_inputs.batch["position_ids"]
+        input_ids = model_inputs["input_ids"]
+        attention_mask = model_inputs["attention_mask"]
+        position_ids = model_inputs["position_ids"]
         input_ids_rmpad, indices, *_ = unpad_input(
             input_ids.unsqueeze(-1), attention_mask
         )  # input_ids_rmpad (total_nnz, ...)

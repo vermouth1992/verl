@@ -24,7 +24,7 @@ from omegaconf import OmegaConf
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
 
@@ -73,9 +73,9 @@ def test_rl_dataset():
         else:
             non_tensors[key] = val
 
-    data_proto = DataProto.from_dict(tensors=tensors, non_tensors=non_tensors)
+    data_proto = tu.batch_from_dict(tensors=tensors, non_tensors=non_tensors)
     assert len(data_proto) == 16
-    assert "raw_prompt" in data_proto.non_tensor_batch
+    assert "raw_prompt" in data_proto.keys()
 
 
 def test_rl_dataset_with_max_samples():
@@ -250,11 +250,11 @@ def test_image_rl_data():
         else:
             non_tensors[key] = val
 
-    data_proto = DataProto.from_dict(tensors=tensors, non_tensors=non_tensors)
+    data_proto = tu.batch_from_dict(tensors=tensors, non_tensors=non_tensors)
     assert len(data_proto) == 16
-    assert "images" not in data_proto.non_tensor_batch
+    assert "images" not in data_proto.keys()
 
-    for prompt in data_proto.non_tensor_batch["raw_prompt"]:
+    for prompt in tu.item(data_proto, "raw_prompt"):
         assert len(prompt) == 1
         prompt = prompt[0]
         role, content = prompt["role"], prompt["content"]
@@ -263,7 +263,7 @@ def test_image_rl_data():
         assert content[0]["type"] == "image" and isinstance(content[0]["image"], Image.Image)
         assert content[1]["type"] == "text" and isinstance(content[1]["text"], str)
 
-    print("raw_prompt", data_proto.non_tensor_batch["raw_prompt"][0])
+    print("raw_prompt", tu.item(data_proto, "raw_prompt")[0])
 
 
 @pytest.fixture
@@ -329,8 +329,8 @@ def test_video_rl_data(video_data_file):
         else:
             non_tensors[key] = val
 
-    data_proto = DataProto.from_dict(tensors=tensors, non_tensors=non_tensors)
+    data_proto = tu.batch_from_dict(tensors=tensors, non_tensors=non_tensors)
     assert len(data_proto) == 16
-    assert "images" not in data_proto.non_tensor_batch
+    assert "images" not in data_proto.keys()
 
-    print("raw_prompt", data_proto.non_tensor_batch["raw_prompt"][0])
+    print("raw_prompt", tu.item(data_proto, "raw_prompt")[0])

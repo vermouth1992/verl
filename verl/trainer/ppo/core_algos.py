@@ -2259,7 +2259,7 @@ def compute_pf_ppo_reweight_data(
     """Reweight the data based on the token_level_scores.
 
     Args:
-        data: DataProto object, containing batch, non_tensor_batch and meta_info
+        data: TensorDict containing tensors, per-sample values, and batch metadata
         reweight_method: str, choices: "pow", "max_min", "max_random"
         weight_pow: float, the power of the weight
 
@@ -2295,39 +2295,15 @@ def compute_pf_ppo_reweight_data(
             raise ValueError(f"Unsupported reweight_method: {reweight_method}")
         return weights
 
-    scores = data.batch["token_level_scores"].sum(dim=-1)
+    scores = data["token_level_scores"].sum(dim=-1)
     weights = compute_weights(scores, reweight_method, weight_pow)
     weights = torch.clamp(weights + 1e-8, min=1e-8)
 
     batch_size = scores.shape[0]
     sample_indices = torch.multinomial(weights, batch_size, replacement=True)
+    from verl.utils.tensordict_utils import index_select_tensor_dict
 
-    resampled_batch = {key: tensor[sample_indices] for key, tensor in data.batch.items()}
-
-    sample_indices_np = sample_indices.numpy()
-    resampled_non_tensor_batch = {}
-    for key, array in data.non_tensor_batch.items():
-        if isinstance(array, np.ndarray):
-            resampled_non_tensor_batch[key] = array[sample_indices_np]
-        else:
-            resampled_non_tensor_batch[key] = [array[i] for i in sample_indices_np]
-
-    resampled_meta_info = {}
-    for key, value in data.meta_info.items():
-        if isinstance(value, list) and len(value) == batch_size:
-            resampled_meta_info[key] = [value[i] for i in sample_indices_np]
-        else:
-            resampled_meta_info[key] = value
-
-    from copy import deepcopy
-
-    resampled_data = deepcopy(data)
-    resampled_data.batch = type(data.batch)(resampled_batch)
-    resampled_data.batch.batch_size = data.batch.batch_size
-    resampled_data.non_tensor_batch = resampled_non_tensor_batch
-    resampled_data.meta_info = resampled_meta_info
-
-    return resampled_data
+    return index_select_tensor_dict(data, sample_indices)
 
 
 def compute_policy_loss_reinforce(
@@ -2517,7 +2493,7 @@ def compute_policy_loss_bypass_mode(
         )
 
     # Extract IS weights tensor (or None if disabled)
-    computed_is_weights = rollout_is_weights_proto.batch["rollout_is_weights"] if rollout_is_weights_proto else None
+    computed_is_weights = rollout_is_weights_proto["rollout_is_weights"] if rollout_is_weights_proto else None
 
     # Apply rejection mask (RS + veto)
     effective_mask = modified_response_mask

@@ -14,8 +14,7 @@
 import logging
 
 import torch
-
-from verl.protocol import DataProto
+from tensordict import TensorDict
 
 logger = logging.getLogger(__file__)
 
@@ -60,12 +59,12 @@ def calculate_log_prob_diff(log_probs1: torch.Tensor, log_probs2: torch.Tensor, 
     return torch.masked_select(full_diff, mask)
 
 
-def calculate_debug_metrics(data: DataProto) -> dict:
+def calculate_debug_metrics(data: TensorDict) -> dict:
     """
     calculate rollout vs actor logprobs diff, for debugging purpose
 
     Args:
-        data: DataProto
+        data: TensorDict
             the data batch to calculate
             rollout_log_probs: log_probs record when rollout forward tokens
             old_log_probs(actor log probs): log_probs record when actor forward tokens
@@ -84,17 +83,17 @@ def calculate_debug_metrics(data: DataProto) -> dict:
         The probs_diff metrics compare exp(logprob) and miss 1-ULP logprob differences; the logprobs metrics do not.
     """
 
-    rollout_old_log_probs = data.batch["rollout_log_probs"]
-    actor_old_log_probs = data.batch["old_log_probs"]
-    if "response_mask" in data.batch:
+    rollout_old_log_probs = data["rollout_log_probs"]
+    actor_old_log_probs = data["old_log_probs"]
+    if "response_mask" in data.keys():
         logger.debug("response mask found, use it to mask log probs")
-        log_prob_mask = data.batch["response_mask"]
-    elif "attention_mask" in data.batch:
-        log_prob_mask = data.batch["attention_mask"]
+        log_prob_mask = data["response_mask"]
+    elif "attention_mask" in data.keys():
+        log_prob_mask = data["attention_mask"]
     else:
-        logger.warning(f"no mask info found, use all log probs, {(data.batch.keys())=}")
+        logger.warning(f"no mask info found, use all log probs, {(data.keys())=}")
         log_prob_mask = torch.ones_like(rollout_old_log_probs)
-    responses = data.batch["responses"]
+    responses = data["responses"]
     response_length = responses.size(1)
 
     response_mask = log_prob_mask[:, -response_length:]

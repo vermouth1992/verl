@@ -316,7 +316,7 @@ class Worker(WorkerHelper):
         """Get the rank of this worker in the distributed setup."""
         return self._rank
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO_WITH_FUNC)
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_BATCH_WITH_FUNC)
     def execute_with_func_generator(self, func, *args, **kwargs):
         """Execute a function with function generator dispatch mode.
 

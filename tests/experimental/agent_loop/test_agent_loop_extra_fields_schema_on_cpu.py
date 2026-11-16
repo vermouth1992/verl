@@ -32,6 +32,7 @@ from verl.experimental.agent_loop.agent_loop import (
     _InternalAgentLoopOutput,
 )
 from verl.experimental.agent_loop.single_turn_agent_loop import SingleTurnAgentLoop
+from verl.utils import tensordict_utils as tu
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from verl.workers.rollout.replica import TokenOutput
 
@@ -454,15 +455,14 @@ async def test_agent_loop_extra_fields_schema_stable_for_training_concat_on_cpu(
         "max_global_steps",
         "extras",
     )
+    merged_samples = tu.per_sample_arrays(merged)
     for key in stable_keys:
-        assert key in merged.non_tensor_batch, f"missing key in merged batch: {key}"
-        assert merged.non_tensor_batch[key].shape == (1,), (
-            f"invalid shape for {key}: {merged.non_tensor_batch[key].shape}"
-        )
+        assert key in merged_samples, f"missing key in merged batch: {key}"
+        assert merged_samples[key].shape == (1,), f"invalid shape for {key}: {merged_samples[key].shape}"
 
     # And the list-typed fields are actually lists (not missing / scalar).
-    assert merged.non_tensor_batch["turn_scores"][0] == []
-    assert merged.non_tensor_batch["tool_rewards"][0] == []
+    assert list(merged_samples["turn_scores"][0]) == []
+    assert list(merged_samples["tool_rewards"][0]) == []
 
 
 @pytest.mark.asyncio

@@ -15,8 +15,9 @@
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from tensordict import TensorDict
 
-from verl import DataProto
+from verl.utils import tensordict_utils as tu
 from verl.utils.device import get_device_name, get_nccl_backend, get_torch_device
 from verl.utils.model import create_random_mask
 from verl.utils.seqlen_balancing import (
@@ -35,8 +36,8 @@ def test_seqlen_balancing():
         input_ids=input_ids, max_ratio_of_left_padding=0.1, max_ratio_of_valid_token=0.9, min_ratio_of_valid_token=0.5
     )
     data = {"input_ids": input_ids, "attention_mask": attention_mask}
-    dataproto = DataProto.from_single_dict(data)
-    micro_batches, micro_bsz_idx_lst = rearrange_micro_batches(dataproto.batch, max_token_len=300)
+    batch = tu.batch_from_single_dict(data)
+    micro_batches, micro_bsz_idx_lst = rearrange_micro_batches(batch, max_token_len=300)
     batch = torch.cat(micro_batches)
     micro_bsz_idx = []
     for idx in micro_bsz_idx_lst:
@@ -44,15 +45,15 @@ def test_seqlen_balancing():
     reverse_idx_map = get_reverse_idx(micro_bsz_idx)
     reverse_idx_map = torch.tensor(reverse_idx_map)
     new_batch = batch[reverse_idx_map]
-    torch.testing.assert_close(new_batch, dataproto.batch)
+    torch.testing.assert_close(new_batch, batch)
 
 
 def test_micro_batches_respect_max_token_len():
     input_ids = torch.zeros((8, 7), dtype=torch.long)
     attention_mask = torch.ones_like(input_ids)
-    dataproto = DataProto.from_single_dict({"input_ids": input_ids, "attention_mask": attention_mask})
+    batch = tu.batch_from_single_dict({"input_ids": input_ids, "attention_mask": attention_mask})
 
-    micro_batches, _ = rearrange_micro_batches(dataproto.batch, max_token_len=8)
+    micro_batches, _ = rearrange_micro_batches(batch, max_token_len=8)
 
     assert len(micro_batches) == 8
     assert all(micro_batch["attention_mask"].sum().item() <= 8 for micro_batch in micro_batches)
@@ -65,11 +66,11 @@ def test_dynamic_batch():
         input_ids=input_ids, max_ratio_of_left_padding=0.1, max_ratio_of_valid_token=0.9, min_ratio_of_valid_token=0.5
     )
     data = {"input_ids": input_ids, "attention_mask": attention_mask}
-    dataproto = DataProto.from_single_dict(data)
-    micro_batches, micro_bsz_idx_lst = prepare_dynamic_batch(dataproto, max_token_len=300)
-    input_ids = torch.cat([micro_batch.batch["input_ids"] for micro_batch in micro_batches], dim=0)
+    batch = tu.batch_from_single_dict(data)
+    micro_batches, micro_bsz_idx_lst = prepare_dynamic_batch(batch, max_token_len=300)
+    input_ids = torch.cat([micro_batch["input_ids"] for micro_batch in micro_batches], dim=0)
     input_ids = restore_dynamic_batch(input_ids, micro_bsz_idx_lst)
-    torch.testing.assert_close(input_ids, dataproto.batch["input_ids"])
+    torch.testing.assert_close(input_ids, batch["input_ids"])
 
 
 def _worker(rank, world_size, init_method, max_token_len, use_same_dp, min_mb):
@@ -92,8 +93,8 @@ def _worker(rank, world_size, init_method, max_token_len, use_same_dp, min_mb):
         min_ratio_of_valid_token=0.5,
     )
     dp = {"input_ids": input_ids, "attention_mask": attention_mask}
-    proto = DataProto.from_single_dict(dp)
-    batch = proto.batch
+    proto = tu.batch_from_single_dict(dp)
+    batch = proto
 
     # 3) call rearrange_micro_batches with one of the two params under test
     micros, idx_lst = rearrange_micro_batches(
@@ -152,9 +153,9 @@ def _constraint_error_worker(rank, world_size, init_method, scenario):
     attention_mask = torch.zeros((len(seq_lens), max_seq_len), dtype=torch.long)
     for i, seq_len in enumerate(seq_lens):
         attention_mask[i, :seq_len] = 1
-    batch = DataProto.from_single_dict(
+    batch = tu.batch_from_single_dict(
         {"input_ids": torch.zeros_like(attention_mask), "attention_mask": attention_mask}
-    ).batch
+    )
 
     try:
         seqlen_balancing.rearrange_micro_batches(
@@ -173,33 +174,33 @@ def _constraint_error_worker(rank, world_size, init_method, scenario):
     dist.destroy_process_group()
 
 
-def test_dataproto_split_uneven():
-    """Test DataProto.split with uneven splits"""
+def test_batch_split_uneven():
+    """Test TensorDict.split with uneven splits"""
     # Create test data with 10 items
     input_ids = torch.randint(low=0, high=10, size=(10, 5))
     attention_mask = torch.ones(10, 5)
     data = {"input_ids": input_ids, "attention_mask": attention_mask}
-    dataproto = DataProto.from_single_dict(data)
+    batch = tu.batch_from_single_dict(data)
 
     # Test split with size 3 (should create chunks of [3, 3, 3, 1])
-    splits = dataproto.split(3)
+    splits = batch.split(3)
     assert len(splits) == 4
     assert len(splits[0]) == 3
     assert len(splits[1]) == 3
     assert len(splits[2]) == 3
     assert len(splits[3]) == 1
 
-    reconstructed = DataProto.concat(splits)
-    torch.testing.assert_close(reconstructed.batch["input_ids"], dataproto.batch["input_ids"])
-    torch.testing.assert_close(reconstructed.batch["attention_mask"], dataproto.batch["attention_mask"])
+    reconstructed = tu.concat_tensordict(splits)
+    torch.testing.assert_close(reconstructed["input_ids"], batch["input_ids"])
+    torch.testing.assert_close(reconstructed["attention_mask"], batch["attention_mask"])
 
     # Test split with size equal to length (should create one chunk)
-    splits = dataproto.split(10)
+    splits = batch.split(10)
     assert len(splits) == 1
     assert len(splits[0]) == 10
 
     # Test split with size larger than length (should create one chunk with all data)
-    splits = dataproto.split(15)
+    splits = batch.split(15)
     assert len(splits) == 1
     assert len(splits[0]) == 10
 
@@ -211,9 +212,9 @@ def test_dataproto_split_uneven():
         "attention_mask": attention_mask,
         "labels": np.array([f"label_{i}" for i in range(10)], dtype=object),
     }
-    dataproto_with_non_tensor = DataProto.from_single_dict(data_with_non_tensor)
+    batch_with_non_tensor = tu.batch_from_single_dict(data_with_non_tensor)
 
-    splits = dataproto_with_non_tensor.split(3)
+    splits = batch_with_non_tensor.split(3)
     assert len(splits) == 4
     assert len(splits[0]) == 3
     assert len(splits[1]) == 3
@@ -221,9 +222,10 @@ def test_dataproto_split_uneven():
     assert len(splits[3]) == 1
 
     # Verify non-tensor data integrity
-    reconstructed = DataProto.concat(splits)
+    reconstructed = tu.concat_tensordict(splits)
     np.testing.assert_array_equal(
-        reconstructed.non_tensor_batch["labels"], dataproto_with_non_tensor.non_tensor_batch["labels"]
+        np.array(tu.item(reconstructed, "labels"), dtype=object),
+        np.array(tu.item(batch_with_non_tensor, "labels"), dtype=object),
     )
 
 

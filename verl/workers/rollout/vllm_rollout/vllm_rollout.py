@@ -33,9 +33,9 @@ from typing import Any, Generator, Optional
 
 import ray
 import torch
+from tensordict import TensorDict
 from torch.distributed.device_mesh import DeviceMesh
 
-from verl import DataProto
 from verl.third_party.vllm import VLLM_SLEEP_LEVEL
 from verl.utils.device import is_support_ipc
 from verl.workers.config import HFModelConfig, RolloutConfig
@@ -322,7 +322,7 @@ class ServerAdapter(BaseRollout):
         """Return the Ray actor name prefix matching the rollout type (e.g. 'vllm_')."""
         return f"{self.config.get('name', 'vllm')}_"
 
-    def generate_sequences(self, prompts: DataProto) -> DataProto:
+    def generate_sequences(self, prompts: TensorDict) -> TensorDict:
         """Batch generate sequences in sync mode.
 
         Note: ServerAdapter uses async server mode and does not support synchronous

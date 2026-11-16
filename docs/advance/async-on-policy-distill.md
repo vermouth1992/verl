@@ -86,7 +86,7 @@ Driver (TaskRunner)
         ├─ For each step:
             • Sync rollout weights
             • Retrieve (batch, gen_output, teacher_output) from futures
-            • Merge gen + teacher outputs → DataProto
+            • Merge gen + teacher outputs → TensorDict
             • Compute metrics (response length stats, timing, throughput)
             • Update actor (forward_backward_batch + KL loss + optimizer step)
             • (Optional) save checkpoint
